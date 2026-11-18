@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { ChaserEditor, ChaserList } from './components/ChaserPanels'
 import { LookPads, SignalPanel } from './components/LivePanels'
 import { LookEditor, LookList } from './components/LookPanels'
+import { Resizer } from './components/Resizer'
 import { Stage3D } from './components/Stage3D'
 import { FixtureInspector, FixtureList } from './components/StagePanels'
 import { TopBar } from './components/TopBar'
@@ -92,6 +93,8 @@ export function App() {
   const view = useStore((s) => s.view)
   const notice = useStore((s) => s.notice)
   const set = useStore((s) => s.set)
+  const panels = useStore((s) => s.panels)
+  const widths = { '--left-w': `${panels.left}px`, '--right-w': `${panels.right}px`, '--right-wide-w': `${panels.rightWide}px` } as React.CSSProperties
 
   useEffect(() => {
     if (connected) return
@@ -103,14 +106,16 @@ export function App() {
   return (
     <div className={`app view-${view}`}>
       <TopBar />
-      <main className="workspace">
+      <main className="workspace" style={widths}>
         {view === 'stage' && <FixtureList />}
         {view === 'looks' && <LookList />}
         {view === 'chasers' && <ChaserList />}
+        {view !== 'live' && <Resizer panel="left" />}
         <div className="center">
           <Stage3D />
           {view === 'live' && <LookPads />}
         </div>
+        <Resizer panel={view === 'looks' || view === 'chasers' ? 'rightWide' : 'right'} />
         {view === 'stage' && <FixtureInspector />}
         {view === 'looks' && <LookEditor />}
         {view === 'chasers' && <ChaserEditor />}

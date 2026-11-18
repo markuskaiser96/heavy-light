@@ -51,7 +51,7 @@ export function TopBar() {
     <header className="topbar">
       <div className="brand">
         <span className="brand-mark" aria-hidden />
-        HeavyLight
+        <span className="brand-name">HeavyLight</span>
       </div>
 
       <div className="show-name">
@@ -94,7 +94,7 @@ export function TopBar() {
           onClick={() => window.heavy.send({ type: 'output', on: !output })}
         >
           <Power size={14} />
-          {output ? 'Output on' : 'Output off'}
+          <span className="output-text">{output ? 'Output on' : 'Output off'}</span>
         </button>
         <label className="master" title="Master dimmer">
           <span>Master</span>

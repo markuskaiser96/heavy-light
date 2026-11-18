@@ -9,6 +9,27 @@ declare global {
   }
 }
 
+/** Side panels the user can resize. `rightWide` is the editor panel of Looks and Chasers. */
+export type PanelName = 'left' | 'right' | 'rightWide'
+export const PANEL_DEFAULTS: Record<PanelName, number> = { left: 264, right: 320, rightWide: 372 }
+const PANEL_MIN = 200
+const PANEL_MAX = 640
+const PANELS_KEY = 'heavylight.panels'
+
+function storedPanels(): Record<PanelName, number> {
+  const panels = { ...PANEL_DEFAULTS }
+  try {
+    const saved = JSON.parse(localStorage.getItem(PANELS_KEY) ?? '{}') as Partial<Record<PanelName, unknown>>
+    for (const name of Object.keys(panels) as PanelName[]) {
+      const w = saved[name]
+      if (typeof w === 'number' && Number.isFinite(w)) panels[name] = Math.min(PANEL_MAX, Math.max(PANEL_MIN, w))
+    }
+  } catch {
+    /* no stored layout, or storage unavailable */
+  }
+  return panels
+}
+
 export type View = 'stage' | 'looks' | 'chasers' | 'live'
 
 /** Latest pixel colours from the engine. Kept outside React state: it changes 60 times a second. */
@@ -19,6 +40,8 @@ interface State {
   path: string | null
   dirty: boolean
   view: View
+  /** Widths of the side panels in pixels. */
+  panels: Record<PanelName, number>
   selectedFixtures: string[]
   lookId: string | null
   layerId: string | null
@@ -39,6 +62,7 @@ interface State {
   undo: () => void
   redo: () => void
   setView: (view: View) => void
+  setPanel: (panel: PanelName, width: number) => void
   selectFixtures: (ids: string[]) => void
   selectLook: (id: string | null) => void
   selectLayer: (id: string | null) => void
@@ -54,6 +78,7 @@ export const useStore = create<State>((set, get) => ({
   path: null,
   dirty: false,
   view: initialView,
+  panels: storedPanels(),
   selectedFixtures: [],
   lookId: null,
   layerId: null,
@@ -96,6 +121,15 @@ export const useStore = create<State>((set, get) => ({
     set({ show: next, past: [...s.past, s.show], future: s.future.slice(1), dirty: true, lastEditKey: '' })
   },
   setView: (view) => set({ view, learning: false }),
+  setPanel: (panel, width) => {
+    const panels = { ...get().panels, [panel]: Math.round(Math.min(PANEL_MAX, Math.max(PANEL_MIN, width))) }
+    set({ panels })
+    try {
+      localStorage.setItem(PANELS_KEY, JSON.stringify(panels))
+    } catch {
+      /* the layout just is not remembered */
+    }
+  },
   selectFixtures: (ids) => set({ selectedFixtures: ids }),
   selectLook: (id) => {
     const look = get().show.looks.find((l) => l.id === id)
