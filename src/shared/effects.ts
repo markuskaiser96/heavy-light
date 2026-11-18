@@ -9,6 +9,7 @@ export type ParamDef =
   | { key: string; label: string; type: 'color'; default: string }
   | { key: string; label: string; type: 'number'; default: number; min: number; max: number; step: number; unit?: string }
   | { key: string; label: string; type: 'toggle'; default: boolean }
+  | { key: string; label: string; type: 'select'; default: string; options: { value: string; label: string }[] }
 
 export interface RenderArgs {
   /** RGB triples, 0..1, one per pixel. */
@@ -19,7 +20,13 @@ export interface RenderArgs {
   /** Seconds since the look started. */
   t: number
   /** Parameters with colours already parsed to [r, g, b]. */
-  p: Record<string, number | boolean | RGB>
+  p: Record<string, number | boolean | string | RGB>
+  /** Image effect only: the bitmap, and each pixel's position on the image plane in metres from its centre. */
+  image?: { width: number; height: number; pixels: Uint8Array }
+  x?: Float32Array
+  y?: Float32Array
+  /** Width and height of the image plane in metres. */
+  size?: [number, number]
 }
 
 export type RGB = [number, number, number]
@@ -28,7 +35,8 @@ export interface EffectDef {
   id: string
   name: string
   hint: string
-  params: ParamDef[]
+  /** Parameters in display order. A `section` starts a labelled group in the editor. */
+  params: (ParamDef & { section?: string })[]
   render(args: RenderArgs): void
 }
 
@@ -78,6 +86,17 @@ const num = (key: string, label: string, def: number, min: number, max: number, 
   unit
 })
 const toggle = (key: string, label: string, def: boolean): ParamDef => ({ key, label, type: 'toggle', default: def })
+const DEG = Math.PI / 180
+
+/** Maps any coordinate into 0..1 the way the chosen edge mode asks. Returns -1 for "outside, stay dark". */
+function wrap(v: number, edge: string): number {
+  if (edge === 'repeat') return frac(v)
+  if (edge === 'mirror') {
+    const m = frac(v / 2) * 2
+    return m > 1 ? 2 - m : m
+  }
+  return v < 0 || v > 1 ? -1 : v
+}
 
 const BLACK = '#000000'
 
@@ -288,6 +307,89 @@ export const EFFECTS: EffectDef[] = [
         mix(bg, c, pos <= progress ? 1 : 0, out, i * 3)
       }
     }
+  },
+  {
+    id: 'image',
+    name: 'Image',
+    hint: 'Lay a picture over the fixtures and move it',
+    params: [
+      num('zoom', 'Size', 1, 0.1, 8, 0.05, '×'),
+      num('angle', 'Rotation', 0, -180, 180, 1, '°'),
+      num('x', 'Shift sideways', 0, -1, 1, 0.01),
+      num('y', 'Shift up', 0, -1, 1, 0.01),
+      {
+        key: 'edge',
+        label: 'Beyond the edge',
+        type: 'select',
+        default: 'repeat',
+        options: [
+          { value: 'repeat', label: 'Repeat the image' },
+          { value: 'mirror', label: 'Repeat it mirrored' },
+          { value: 'dark', label: 'Stay dark' }
+        ]
+      },
+      toggle('smooth', 'Smooth between image pixels', true),
+      { ...num('moveX', 'Travel sideways', 0, -4, 4, 0.05, 'Hz'), section: 'Motion' },
+      num('moveY', 'Travel up', 0, -4, 4, 0.05, 'Hz'),
+      toggle('swing', 'Travel back and forth', false),
+      num('spin', 'Spin', 0, -2, 2, 0.01, 'Hz'),
+      num('zoomPulse', 'Zoom in and out by', 0, 0, 0.9, 0.05),
+      num('zoomRate', 'Zoom rate', 0.5, 0.05, 8, 0.05, 'Hz')
+    ],
+    render({ out, count, t, p, image, x, y, size }) {
+      if (!image || !x || !y || !size) {
+        out.fill(0, 0, count * 3)
+        return
+      }
+      const { width: w, height: h, pixels } = image
+      const edge = p.edge as string
+      const zoom = Math.max(0.01, (p.zoom as number) * (1 + (p.zoomPulse as number) * Math.sin(TAU * (p.zoomRate as number) * t)))
+      const angle = ((p.angle as number) + 360 * (p.spin as number) * t) * DEG
+      const cos = Math.cos(angle) / zoom
+      const sin = Math.sin(angle) / zoom
+      // Travel: either runs on forever (1 Hz = one image width per second) or swings half an image to each side.
+      const travel = (speed: number) => (p.swing ? 0.5 * Math.sin(TAU * speed * t) : speed * t)
+      const ox = (p.x as number) + travel(p.moveX as number)
+      const oy = (p.y as number) + travel(p.moveY as number)
+      const smooth = p.smooth as boolean
+      const repeat = edge === 'repeat'
+
+      for (let i = 0; i < count; i++) {
+        const o = i * 3
+        // Turn and scale the pixel's position the opposite way, which turns and scales the image.
+        const u = wrap((x[i] * cos + y[i] * sin) / size[0] + 0.5 - ox, edge)
+        const v = wrap(0.5 - (y[i] * cos - x[i] * sin) / size[1] + oy, edge)
+        if (u < 0 || v < 0) {
+          out[o] = out[o + 1] = out[o + 2] = 0
+          continue
+        }
+        const fx = u * w - 0.5
+        const fy = v * h - 0.5
+        if (!smooth) {
+          const s = (Math.min(h - 1, Math.max(0, Math.round(fy))) * w + Math.min(w - 1, Math.max(0, Math.round(fx)))) * 3
+          out[o] = pixels[s] / 255
+          out[o + 1] = pixels[s + 1] / 255
+          out[o + 2] = pixels[s + 2] / 255
+          continue
+        }
+        const x0 = Math.floor(fx)
+        const y0 = Math.floor(fy)
+        const ax = fx - x0
+        const ay = fy - y0
+        // Neighbours across the edge: the other side when repeating, the edge pixel itself otherwise.
+        const col = (c: number) => (repeat ? ((c % w) + w) % w : Math.min(w - 1, Math.max(0, c)))
+        const row = (r: number) => (repeat ? ((r % h) + h) % h : Math.min(h - 1, Math.max(0, r)))
+        const a = (row(y0) * w + col(x0)) * 3
+        const b = (row(y0) * w + col(x0 + 1)) * 3
+        const c = (row(y0 + 1) * w + col(x0)) * 3
+        const d = (row(y0 + 1) * w + col(x0 + 1)) * 3
+        for (let k = 0; k < 3; k++) {
+          const top = pixels[a + k] + (pixels[b + k] - pixels[a + k]) * ax
+          const bottom = pixels[c + k] + (pixels[d + k] - pixels[c + k]) * ax
+          out[o + k] = (top + (bottom - top) * ay) / 255
+        }
+      }
+    }
   }
 ]
 
@@ -305,6 +407,7 @@ export function prepareParams(def: EffectDef, params: Record<string, ParamValue>
     const v = params[d.key]
     if (d.type === 'color') out[d.key] = parseColor(typeof v === 'string' ? v : d.default)
     else if (d.type === 'toggle') out[d.key] = typeof v === 'boolean' ? v : d.default
+    else if (d.type === 'select') out[d.key] = d.options.some((o) => o.value === v) ? (v as string) : d.default
     else out[d.key] = typeof v === 'number' && Number.isFinite(v) ? Math.min(d.max, Math.max(d.min, v)) : d.default
   }
   return out

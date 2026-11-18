@@ -1,8 +1,12 @@
-import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, ImagePlus, Plus, Trash2 } from 'lucide-react'
+import { Fragment, useRef } from 'react'
 import { defaultParams, EFFECT_BY_ID, EFFECTS } from '@shared/effects'
 import { LOOK_COLORS, newId, newLayer, newLook } from '@shared/show'
 import type { Blend, Layer, Look, Mapping, Triggerable } from '@shared/types'
+import { autoPlane } from '@shared/patch'
+import { imageUrl, loadImageFile } from '../images'
 import { editLayer, editLook, useStore } from '../store'
+import { usePatch } from './Stage3D'
 import { ColorInput, Field, noteName, NumberInput, Section, Segmented, Select, Slider, TextInput, Toggle } from './ui'
 
 const MAPPINGS: { value: Mapping; label: string }[] = [
@@ -90,6 +94,76 @@ function TargetPicker({ layer, lookId }: { layer: Layer; lookId: string }) {
   )
 }
 
+/** Picture and placement of an image layer. */
+function ImageSource({ look, layer }: { look: Look; layer: Layer }) {
+  const id = String(layer.params.image ?? '')
+  const asset = useStore((s) => s.show.images[id])
+  const groups = useStore((s) => s.show.groups)
+  const edit = useStore((s) => s.edit)
+  const set = useStore((s) => s.set)
+  const patch = usePatch()
+  const input = useRef<HTMLInputElement>(null)
+
+  const choose = async (file: File | undefined) => {
+    if (!file) return
+    try {
+      const image = await loadImageFile(file)
+      const key = newId()
+      edit((s) => ({
+        ...s,
+        images: { ...s.images, [key]: image },
+        looks: s.looks.map((l) => (l.id === look.id ? { ...l, layers: l.layers.map((y) => (y.id === layer.id ? { ...y, params: { ...y.params, image: key } } : y)) } : l))
+      }))
+    } catch {
+      set({ notice: { kind: 'error', text: `${file.name} could not be read as a picture. Use a PNG, JPEG, WebP or GIF file.` } })
+    }
+  }
+
+  return (
+    <>
+      <div className="image-source">
+        <button className={`image-thumb${asset ? '' : ' none'}`} title="Choose a picture" onClick={() => input.current?.click()}>
+          {asset ? <img src={imageUrl(id, asset)} alt="" /> : <ImagePlus size={20} />}
+        </button>
+        <div className="image-meta">
+          <strong>{asset ? asset.name : 'No picture yet'}</strong>
+          <span className="muted">{asset ? `${asset.width} × ${asset.height} pixels in the show` : 'Dark until you choose one'}</span>
+          <button className="button small ghost" onClick={() => input.current?.click()}>
+            {asset ? 'Replace picture…' : 'Choose picture…'}
+          </button>
+        </div>
+        <input
+          ref={input}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
+          hidden
+          onChange={(e) => {
+            void choose(e.target.files?.[0])
+            e.target.value = ''
+          }}
+        />
+      </div>
+      <div className="form-grid">
+        <Field label="Placed" wide>
+          <Segmented
+            value={layer.plane ? 'free' : 'auto'}
+            onChange={(v) => editLayer(look.id, layer.id, { plane: v === 'free' ? autoPlane({ groups }, patch, layer.targets) : undefined })}
+            options={[
+              { value: 'auto', label: 'Over the fixtures' },
+              { value: 'free', label: 'Freely on stage' }
+            ]}
+          />
+        </Field>
+        <p className="form-note">
+          {layer.plane
+            ? 'Drag the frame on the stage: Move, Rotate and Size are at the top left. Each pixel takes the colour of the spot straight in front of or behind it.'
+            : 'The picture is stretched over the fixtures of this layer, as seen from the front. The frame on the stage shows where it lies.'}
+        </p>
+      </div>
+    </>
+  )
+}
+
 function LayerEditor({ look, layer }: { look: Look; layer: Layer }) {
   const def = EFFECT_BY_ID.get(layer.effect)
   const setParam = (key: string, value: number | string | boolean) =>
@@ -98,7 +172,8 @@ function LayerEditor({ look, layer }: { look: Look; layer: Layer }) {
   const changeEffect = (effect: string) => {
     const next = defaultParams(effect)
     // Keep the colours the user already chose where the new effect has the same parameter.
-    for (const key of Object.keys(next)) if (typeof next[key] === 'string' && typeof layer.params[key] === 'string') next[key] = layer.params[key]
+    for (const key of Object.keys(next)) if (typeof next[key] === 'string' && typeof layer.params[key] === 'string' && key !== 'edge') next[key] = layer.params[key]
+    if (typeof layer.params.image === 'string') next.image = layer.params.image
     editLayer(look.id, layer.id, { effect, params: next })
   }
 
@@ -112,19 +187,27 @@ function LayerEditor({ look, layer }: { look: Look; layer: Layer }) {
             </button>
           ))}
         </div>
+        {layer.effect === 'image' && <ImageSource look={look} layer={layer} />}
         <div className="params">
           {def?.params.map((p) => {
             const v = layer.params[p.key] ?? p.default
             return (
-              <Field key={p.key} label={p.label} wide>
-                {p.type === 'color' ? (
-                  <ColorInput value={String(v)} onChange={(c) => setParam(p.key, c)} />
-                ) : p.type === 'toggle' ? (
-                  <Toggle value={Boolean(v)} onChange={(b) => setParam(p.key, b)} label={v ? 'On' : 'Off'} />
+              <Fragment key={p.key}>
+                {p.section && <h4 className="params-title">{p.section}</h4>}
+                {p.type === 'toggle' ? (
+                  <Toggle value={Boolean(v)} onChange={(b) => setParam(p.key, b)} label={p.label} />
                 ) : (
-                  <Slider value={Number(v)} min={p.min} max={p.max} step={p.step} unit={p.unit} onChange={(n) => setParam(p.key, n)} />
+                  <Field label={p.label} wide>
+                    {p.type === 'color' ? (
+                      <ColorInput value={String(v)} onChange={(c) => setParam(p.key, c)} />
+                    ) : p.type === 'select' ? (
+                      <Select value={String(v)} onChange={(o) => setParam(p.key, o)} options={p.options} />
+                    ) : (
+                      <Slider value={Number(v)} min={p.min} max={p.max} step={p.step} unit={p.unit} onChange={(n) => setParam(p.key, n)} />
+                    )}
+                  </Field>
                 )}
-              </Field>
+              </Fragment>
             )
           })}
         </div>
@@ -133,9 +216,11 @@ function LayerEditor({ look, layer }: { look: Look; layer: Layer }) {
       <Section title="Where">
         <TargetPicker layer={layer} lookId={look.id} />
         <div className="form-grid">
-          <Field label="Direction" wide>
-            <Select value={layer.mapping} onChange={(mapping) => editLayer(look.id, layer.id, { mapping })} options={MAPPINGS} />
-          </Field>
+          {layer.effect !== 'image' && (
+            <Field label="Direction" wide>
+              <Select value={layer.mapping} onChange={(mapping) => editLayer(look.id, layer.id, { mapping })} options={MAPPINGS} />
+            </Field>
+          )}
           <Field label="Mixing" wide>
             <Select value={layer.blend} onChange={(blend) => editLayer(look.id, layer.id, { blend })} options={BLENDS} />
           </Field>

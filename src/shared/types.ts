@@ -45,10 +45,32 @@ export type Mapping = 'fixture' | 'span' | 'index' | 'stageX' | 'stageY' | 'stag
 export type Blend = 'normal' | 'add' | 'max' | 'multiply'
 export type ParamValue = number | string | boolean
 
+/** A small bitmap stored in the show. See shared/images.ts. */
+export interface ImageAsset {
+  name: string
+  width: number
+  height: number
+  /** Raw RGB bytes, row by row from the top, base64 encoded. */
+  data: string
+}
+
+/** A rectangle on stage that an image is projected from, straight along its normal. */
+export interface Plane {
+  /** Centre, in metres. */
+  position: Vec3
+  /** Euler angles in degrees, XYZ order. Unrotated, the image faces the audience. */
+  rotation: Vec3
+  width: number
+  height: number
+}
+
 export interface Layer {
   id: string
   effect: string
+  /** For the image effect, `image` holds the key into Show.images. */
   params: Record<string, ParamValue>
+  /** Image effect only: where the image sits on stage. Absent = stretched over the targeted fixtures, seen from the front. */
+  plane?: Plane
   /** Fixture or group ids. Empty = all fixtures. */
   targets: string[]
   mapping: Mapping
@@ -113,6 +135,7 @@ export interface Show {
   groups: Group[]
   looks: Look[]
   chasers: Chaser[]
+  images: Record<string, ImageAsset>
   stage: { width: number; depth: number }
   settings: {
     /** Art-Net frames per second. */

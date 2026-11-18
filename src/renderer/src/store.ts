@@ -180,7 +180,10 @@ export const editLayer = (lookId: string, layerId: string, patch: Partial<Layer>
 export async function saveShow(saveAs = false): Promise<boolean> {
   const s = useStore.getState()
   try {
-    const path = await window.heavy.saveShow({ path: saveAs ? null : s.path, text: JSON.stringify(s.show, null, 2), name: s.show.name })
+    // Pictures that no layer uses any more (replaced ones are kept for undo) are left out of the file.
+    const used = new Set(s.show.looks.flatMap((l) => l.layers.map((y) => String(y.params.image ?? ''))))
+    const images = Object.fromEntries(Object.entries(s.show.images).filter(([id]) => used.has(id)))
+    const path = await window.heavy.saveShow({ path: saveAs ? null : s.path, text: JSON.stringify({ ...s.show, images }, null, 2), name: s.show.name })
     if (!path) return false
     // Only clear the edited mark if nothing changed while the file was being written.
     useStore.setState((now) => ({ path, dirty: now.show !== s.show }))

@@ -1,5 +1,5 @@
 import { resolveMode, type ResolvedMode } from './ofl'
-import type { FixtureInstance, Layer, Show, Vec3 } from './types'
+import type { FixtureInstance, Layer, Plane, Show, Vec3 } from './types'
 
 /**
  * Turns a show's fixture list into flat arrays: one global "cell" (pixel) index space with
@@ -201,4 +201,60 @@ export function mapLayer(show: Show, patch: Patch, layer: Layer): { cells: Uint3
     }
   }
   return { cells, u }
+}
+
+type Fixtures = Pick<Show, 'groups'>
+
+/** The plane an image layer uses when none was placed by hand: a rectangle around the targeted fixtures, seen from the front. */
+export function autoPlane(show: Fixtures, patch: Patch, targets: string[]): Plane {
+  const min = [Infinity, Infinity, Infinity]
+  const max = [-Infinity, -Infinity, -Infinity]
+  for (const pf of resolveTargets(show as Show, patch, targets)) {
+    for (let i = pf.cellStart; i < pf.cellStart + pf.cellCount; i++) {
+      for (let axis = 0; axis < 3; axis++) {
+        const v = patch.positions[i * 3 + axis]
+        if (v < min[axis]) min[axis] = v
+        if (v > max[axis]) max[axis] = v
+      }
+    }
+  }
+  if (min[0] === Infinity) return { position: { x: 0, y: 1, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, width: 1, height: 1 }
+  let width = max[0] - min[0]
+  let height = max[1] - min[1]
+  // Fixtures in a single line have no area: use a square of their length.
+  if (width < 0.01 && height < 0.01) width = height = 1
+  else if (width < 0.01) width = height
+  else if (height < 0.01) height = width
+  // A little larger than the fixtures, so the outermost pixels lie inside the picture and not exactly
+  // on its edge, where a repeating picture would already show its other side.
+  width *= 1.02
+  height *= 1.02
+  const mid = (axis: number) => +((min[axis] + max[axis]) / 2).toFixed(3)
+  return { position: { x: mid(0), y: mid(1), z: mid(2) }, rotation: { x: 0, y: 0, z: 0 }, width: +width.toFixed(3), height: +height.toFixed(3) }
+}
+
+/**
+ * Where each cell of an image layer sits on the image plane, in metres from the plane's centre
+ * (x to the right, y up). Cells are in the same order as `mapLayer` returns them.
+ */
+export function mapImage(show: Show, patch: Patch, layer: Layer): { x: Float32Array; y: Float32Array; size: [number, number] } {
+  const plane = layer.plane ?? autoPlane(show, patch, layer.targets)
+  const origin = { x: 0, y: 0, z: 0 }
+  const right = toWorld({ x: 1, y: 0, z: 0 }, plane.rotation, origin)
+  const up = toWorld({ x: 0, y: 1, z: 0 }, plane.rotation, origin)
+  const targets = resolveTargets(show, patch, layer.targets)
+  const total = targets.reduce((n, pf) => n + pf.cellCount, 0)
+  const x = new Float32Array(total)
+  const y = new Float32Array(total)
+  let k = 0
+  for (const pf of targets) {
+    for (let i = pf.cellStart; i < pf.cellStart + pf.cellCount; i++) {
+      const dx = patch.positions[i * 3] - plane.position.x
+      const dy = patch.positions[i * 3 + 1] - plane.position.y
+      const dz = patch.positions[i * 3 + 2] - plane.position.z
+      x[k] = dx * right.x + dy * right.y + dz * right.z
+      y[k++] = dx * up.x + dy * up.y + dz * up.z
+    }
+  }
+  return { x, y, size: [Math.max(0.001, plane.width), Math.max(0.001, plane.height)] }
 }

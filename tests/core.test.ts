@@ -4,7 +4,8 @@ import { Engine } from '../src/engine/engine'
 import { createArtDmx, finishArtDmx } from '../src/engine/artnet'
 import { EFFECTS, prepareParams, defaultParams } from '../src/shared/effects'
 import { makeGenericPixelFixture, resolveMode, type OflFixture } from '../src/shared/ofl'
-import { compilePatch, layoutSegments, mapLayer, toWorld } from '../src/shared/patch'
+import { encodeImage } from '../src/shared/images'
+import { autoPlane, compilePatch, layoutSegments, mapImage, mapLayer, toWorld } from '../src/shared/patch'
 import { demoShow, emptyShow, newChaser, newLayer, newLook, newStep, normalizeShow, LIBRARY } from '../src/shared/show'
 import type { FromEngine, Show } from '../src/shared/types'
 
@@ -138,6 +139,63 @@ describe('show files', () => {
     const show = demoShow()
     expect(normalizeShow(JSON.parse(JSON.stringify(show)))).toEqual(show)
     expect(() => normalizeShow({ hello: 1 })).toThrow('not a HeavyLight show')
+  })
+})
+
+describe('image effect', () => {
+  // Four strips of four pixels, stacked into a 4 × 4 square: x from -1.5 to 1.5, y from 3 (top) down to 0.
+  function square(): Show {
+    const show = emptyShow()
+    show.definitions.strip = makeGenericPixelFixture(4, 1, 'RGB')
+    show.fixtures = [0, 1, 2, 3].map((row) => ({
+      id: `row${row}`, name: `Row ${row}`, definition: 'strip', mode: 'RGB', host: '127.0.0.1', universe: row, address: 1,
+      position: { x: 0, y: 3 - row, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, size: { w: 3, h: 0 }
+    }))
+    // 2 × 2 picture: red, green / blue, white.
+    show.images.quad = encodeImage('Quad', 2, 2, Uint8Array.from([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]))
+    return show
+  }
+  const render = (show: Show, params: Record<string, number | string | boolean>, t = 0, plane?: Show['looks'][0]['layers'][0]['plane']) => {
+    const patch = compilePatch(show)
+    const layer = { ...newLayer('image'), params: { ...defaultParams('image'), image: 'quad', smooth: false, ...params }, plane }
+    const def = EFFECTS.find((e) => e.id === 'image')!
+    const out = new Float32Array(48)
+    def.render({ out, u: new Float32Array(16), count: 16, t, p: prepareParams(def, layer.params), image: { width: 2, height: 2, pixels: Uint8Array.from(atob(show.images.quad.data), (c) => c.charCodeAt(0)) }, ...mapImage(show, patch, layer) })
+    // Colour of the pixel in a column (0 = left) and row (0 = top).
+    return (col: number, row: number) => [...out.subarray((row * 4 + col) * 3, (row * 4 + col) * 3 + 3)]
+  }
+
+  it('stretches the picture over the fixtures, seen from the front', () => {
+    const show = square()
+    expect(autoPlane(show, compilePatch(show), [])).toEqual({ position: { x: 0, y: 1.5, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, width: 3.06, height: 3.06 })
+    const at = render(show, {})
+    expect(at(0, 0)).toEqual([1, 0, 0])
+    expect(at(3, 0)).toEqual([0, 1, 0])
+    expect(at(0, 3)).toEqual([0, 0, 1])
+    expect(at(3, 3)).toEqual([1, 1, 1])
+  })
+
+  it('travels, turns and can stay dark outside the picture', () => {
+    const show = square()
+    // Half a picture to the right after one second: the left half now shows what was on the right.
+    expect(render(show, { moveX: 0.5 }, 1)(0, 0)).toEqual([0, 1, 0])
+    // Turned by 180°: corners swap diagonally.
+    expect(render(show, { angle: 180 })(0, 0)).toEqual([1, 1, 1])
+    // A quarter turn anticlockwise moves the top-right corner (green) to the top left.
+    expect(render(show, { angle: 90 })(0, 0)).toEqual([0, 1, 0])
+    // At half size the picture only covers the middle; the corners are outside.
+    const small = render(show, { zoom: 0.5, edge: 'dark' })
+    expect(small(0, 0)).toEqual([0, 0, 0])
+    expect(small(1, 1)).toEqual([1, 0, 0])
+  })
+
+  it('projects from a freely placed frame', () => {
+    const show = square()
+    // A frame over the top-left quarter only: its right half is green.
+    const at = render(show, { edge: 'dark' }, 0, { position: { x: -1, y: 2.5, z: 2 }, rotation: { x: 0, y: 0, z: 0 }, width: 2, height: 2 })
+    expect(at(0, 0)).toEqual([1, 0, 0])
+    expect(at(1, 0)).toEqual([0, 1, 0])
+    expect(at(3, 3)).toEqual([0, 0, 0])
   })
 })
 

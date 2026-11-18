@@ -1,6 +1,7 @@
 import { defaultParams } from './effects'
+import { encodeImage, isImageAsset } from './images'
 import { genericPixelKey, isOflFixture, makeGenericPixelFixture, type OflFixture } from './ofl'
-import type { Chaser, ChaserStep, FixtureInstance, Layer, Look, Show } from './types'
+import type { Chaser, ChaserStep, FixtureInstance, ImageAsset, Layer, Look, Show } from './types'
 import drgbFader from './library/drgb-fader.json'
 import ledBar from './library/led-bar-240-8.json'
 import rgbFader from './library/rgb-fader.json'
@@ -33,6 +34,7 @@ export function emptyShow(): Show {
     groups: [],
     looks: [],
     chasers: [],
+    images: {},
     stage: { width: 8, depth: 5 },
     settings: { outputRate: 60, gamma: 2.2 }
   }
@@ -89,8 +91,11 @@ export function normalizeShow(value: unknown): Show {
   const base = emptyShow()
   const definitions: Record<string, OflFixture> = {}
   for (const [key, def] of Object.entries(raw.definitions ?? {})) if (isOflFixture(def)) definitions[key] = def
+  const images: Record<string, ImageAsset> = {}
+  for (const [key, image] of Object.entries(raw.images ?? {})) if (isImageAsset(image)) images[key] = image
   return {
     ...base,
+    images,
     name: typeof raw.name === 'string' ? raw.name : base.name,
     definitions,
     fixtures: (raw.fixtures ?? []).map((f) => ({
@@ -111,6 +116,28 @@ export function normalizeShow(value: unknown): Show {
 export function nextHost(host: string, step: number): string {
   const m = /^(\d+\.\d+\.\d+\.)(\d+)$/.exec(host)
   return m ? `${m[1]}${Math.min(254, Number(m[2]) + step)}` : host
+}
+
+/** A small flame texture for the demo show: bright and yellow at the bottom, red tongues fading out towards the top. */
+function flames(): ImageAsset {
+  const w = 48
+  const h = 64
+  const rgb = new Uint8Array(w * h * 3)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const up = 1 - y / (h - 1)
+      // Tongues: sines that tile horizontally and vertically, so the image can travel without a seam.
+      const a = (x / w) * Math.PI * 2
+      const b = (y / h) * Math.PI * 2
+      const tongue = 0.5 + 0.25 * Math.sin(a * 2 + Math.sin(b) * 1.5) + 0.25 * Math.sin(a * 5 - b * 2)
+      const heat = Math.max(0, Math.min(1, 0.35 + 0.65 * tongue - 0.25 * Math.cos(b)))
+      const o = (y * w + x) * 3
+      rgb[o] = Math.round(255 * Math.min(1, heat * 1.6))
+      rgb[o + 1] = Math.round(255 * Math.max(0, heat * 1.5 - 0.55))
+      rgb[o + 2] = Math.round(255 * Math.max(0, heat * 2 - 1.7) * up)
+    }
+  }
+  return encodeImage('Flames', w, h, rgb)
 }
 
 /** The band's rig from the project briefing: 13 WLED beams, one Art-Net universe each. */
@@ -174,8 +201,10 @@ export function demoShow(): Show {
       { effect: 'strobe', targets: ['g-odd'], params: { color: '#27e0ff', rate: 4, duty: 0.5 } },
       { effect: 'solid', targets: ['g-even'], params: { color: '#6a1bff' } }
     ]),
-    look(8, 'Strobe', 44, { fadeOut: 0 }, [{ effect: 'strobe', blend: 'max', params: { color: '#ffffff', rate: 12, duty: 0.3 } }])
+    look(8, 'Strobe', 44, { fadeOut: 0 }, [{ effect: 'strobe', blend: 'max', params: { color: '#ffffff', rate: 12, duty: 0.3 } }]),
+    look(9, 'Fire', 45, { fadeIn: 300, fadeOut: 600 }, [{ effect: 'image', params: { image: 'flames', moveY: 0.35, moveX: 0.04 } }])
   ]
+  show.images.flames = flames()
 
   const chaser = (i: number, name: string, note: number, patch: Partial<Chaser>, steps: [look: number, beats: number][]): Chaser => ({
     ...newChaser(name, i),

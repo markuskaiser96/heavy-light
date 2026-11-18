@@ -3,9 +3,10 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Bloom, EffectComposer } from '@react-three/postprocessing'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
-import { compilePatch, type Patch, type PatchedFixture } from '@shared/patch'
-import type { Vec3 } from '@shared/types'
-import { frame, useStore } from '../store'
+import { autoPlane, compilePatch, type Patch, type PatchedFixture } from '@shared/patch'
+import type { Plane, Vec3 } from '@shared/types'
+import { imageCanvas } from '../images'
+import { editLayer, frame, useStore } from '../store'
 
 const DEG = Math.PI / 180
 const MAX_LIGHTS = 16
@@ -123,7 +124,7 @@ function Spill({ patch }: { patch: Patch }) {
   )
 }
 
-function FixtureBodies({ patch, editable, mode }: { patch: Patch; editable: boolean; mode: 'translate' | 'rotate' }) {
+function FixtureBodies({ patch, editable, mode }: { patch: Patch; editable: boolean; mode: 'translate' | 'rotate' | 'scale' }) {
   const selected = useStore((s) => s.selectedFixtures)
   const selectFixtures = useStore((s) => s.selectFixtures)
   const [hover, setHover] = useState<string | null>(null)
@@ -237,6 +238,99 @@ function FixtureBodies({ patch, editable, mode }: { patch: Patch; editable: bool
   )
 }
 
+/** The image layer being edited in the Looks tab, if any. */
+function useImageLayer() {
+  const active = useStore((s) => s.view === 'looks' && s.preview)
+  const look = useStore((s) => s.show.looks.find((l) => l.id === s.lookId))
+  const layerId = useStore((s) => s.layerId)
+  const layer = look?.layers.find((y) => y.id === layerId) ?? look?.layers.at(-1)
+  return active && look && layer?.effect === 'image' ? { look, layer } : null
+}
+
+/**
+ * Shows where the picture of an image layer lies on stage, as a faint frame. A frame the user
+ * placed freely can be dragged, turned and resized.
+ */
+function ImageFrame({ patch, mode }: { patch: Patch; mode: 'translate' | 'rotate' | 'scale' }) {
+  const editing = useImageLayer()
+  const groups = useStore((s) => s.show.groups)
+  const id = String(editing?.layer.params.image ?? '')
+  const asset = useStore((s) => s.show.images[id])
+  const [handle, setHandle] = useState<THREE.Group | null>(null)
+  const drag = useRef<Plane | null>(null)
+
+  const texture = useMemo(() => {
+    if (!asset) return null
+    const t = new THREE.CanvasTexture(imageCanvas(id, asset))
+    t.colorSpace = THREE.SRGBColorSpace
+    t.magFilter = THREE.NearestFilter
+    return t
+  }, [id, asset])
+  useEffect(() => () => texture?.dispose(), [texture])
+
+  if (!editing) return null
+  const { look, layer } = editing
+  const plane = layer.plane ?? autoPlane({ groups }, patch, layer.targets)
+  const position: [number, number, number] = [plane.position.x, plane.position.y, plane.position.z]
+  const rotation: [number, number, number] = [plane.rotation.x * DEG, plane.rotation.y * DEG, plane.rotation.z * DEG]
+
+  const applyDrag = () => {
+    const start = drag.current
+    if (!handle || !start) return
+    const round = (v: number, digits: number) => +v.toFixed(digits) || 0
+    editLayer(
+      look.id,
+      layer.id,
+      {
+        plane: {
+          position: { x: round(handle.position.x, 3), y: round(handle.position.y, 3), z: round(handle.position.z, 3) },
+          rotation: { x: round(handle.rotation.x / DEG, 1), y: round(handle.rotation.y / DEG, 1), z: round(handle.rotation.z / DEG, 1) },
+          width: round(Math.max(0.05, start.width * Math.abs(handle.scale.x)), 3),
+          height: round(Math.max(0.05, start.height * Math.abs(handle.scale.y)), 3)
+        }
+      },
+      `frame-${layer.id}-${mode}`
+    )
+  }
+
+  return (
+    <>
+      <group position={position} rotation={rotation}>
+        <mesh>
+          <planeGeometry args={[plane.width, plane.height]} />
+          <meshBasicMaterial map={texture} transparent opacity={texture ? 0.22 : 0.06} side={THREE.DoubleSide} depthWrite={false} toneMapped={false} />
+        </mesh>
+        <lineSegments>
+          <edgesGeometry args={[new THREE.PlaneGeometry(plane.width, plane.height)]} />
+          <lineBasicMaterial color={layer.plane ? '#ffb347' : '#5f657b'} toneMapped={false} />
+        </lineSegments>
+      </group>
+      {layer.plane && (
+        <>
+          <group ref={setHandle} position={position} rotation={rotation} />
+          {handle && (
+            <TransformControls
+              object={handle}
+              mode={mode}
+              space="local"
+              size={0.7}
+              rotationSnap={5 * DEG}
+              translationSnap={0.05}
+              onMouseDown={() => (drag.current = plane)}
+              onObjectChange={applyDrag}
+              onMouseUp={() => {
+                drag.current = null
+                // The size handles only measure the stretch; the frame itself carries the new size.
+                handle.scale.set(1, 1, 1)
+              }}
+            />
+          )}
+        </>
+      )}
+    </>
+  )
+}
+
 function StageFloor() {
   const { width, depth } = useStore((s) => s.show.stage)
   const outline = useMemo(() => new THREE.EdgesGeometry(new THREE.BoxGeometry(width, 0.001, depth)), [width, depth])
@@ -283,7 +377,8 @@ export function Stage3D() {
   const editable = useStore((s) => s.view === 'stage')
   const selected = useStore((s) => s.selectedFixtures.length)
   const selectFixtures = useStore((s) => s.selectFixtures)
-  const [mode, setMode] = useState<'translate' | 'rotate'>('translate')
+  const [mode, setMode] = useState<'translate' | 'rotate' | 'scale'>('translate')
+  const frameEditing = useImageLayer()?.layer.plane !== undefined
   const [preset, setPreset] = useState<{ name: CameraName; n: number }>({ name: 'front', n: 0 })
 
   return (
@@ -300,7 +395,8 @@ export function Stage3D() {
         <StageFloor />
         <Pixels patch={patch} />
         <Spill patch={patch} />
-        <FixtureBodies patch={patch} editable={editable} mode={mode} />
+        <FixtureBodies patch={patch} editable={editable} mode={mode === 'scale' ? 'translate' : mode} />
+        <ImageFrame patch={patch} mode={mode} />
         <OrbitControls makeDefault target={[0, 0.7, 0]} maxPolarAngle={Math.PI / 2 - 0.01} minDistance={1.5} maxDistance={40} />
         <CameraRig preset={preset} />
         <EffectComposer>
@@ -316,14 +412,19 @@ export function Stage3D() {
             </button>
           ))}
         </div>
-        {editable && selected > 0 && (
+        {((editable && selected > 0) || frameEditing) && (
           <div className="segmented" role="group" aria-label="Drag handle">
-            <button className={mode === 'translate' ? 'on' : ''} onClick={() => setMode('translate')}>
+            <button className={mode === 'translate' || (mode === 'scale' && !frameEditing) ? 'on' : ''} onClick={() => setMode('translate')}>
               Move
             </button>
             <button className={mode === 'rotate' ? 'on' : ''} onClick={() => setMode('rotate')}>
               Rotate
             </button>
+            {frameEditing && (
+              <button className={mode === 'scale' ? 'on' : ''} onClick={() => setMode('scale')}>
+                Size
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -24,6 +24,7 @@ unicast Art-Net is blocked by the system.
   set IP, universe and start address, and place them in 3D.
 - **Looks**: a look is one or more layers; each layer puts an effect on some fixtures.
   A MIDI note plays a look ("Learn from MIDI" assigns it).
+  The Image effect lays a picture over the fixtures and can move, spin and zoom it.
 - **Chasers**: run looks one after the other in tempo (beats and bpm), started by a MIDI note.
 - **Live**: pads for every look, master, blackout, MIDI monitor and timing measurements.
 

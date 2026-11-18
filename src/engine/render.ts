@@ -1,5 +1,6 @@
 import { EFFECT_BY_ID, prepareParams, type EffectDef, type RenderArgs } from '@shared/effects'
-import { mapLayer, type Patch } from '@shared/patch'
+import { imagePixels } from '@shared/images'
+import { mapImage, mapLayer, type Patch } from '@shared/patch'
 import type { Blend, Show } from '@shared/types'
 
 interface CompiledLayer {
@@ -33,13 +34,16 @@ export class LookRenderer {
         if (!def) continue
         const { cells, u } = mapLayer(show, patch, layer)
         if (cells.length === 0) continue
-        compiled.push({
-          def,
-          cells,
-          blend: layer.blend,
-          opacity: Math.min(1, Math.max(0, layer.opacity)),
-          args: { out: new Float32Array(cells.length * 3), u, count: cells.length, t: 0, p: prepareParams(def, layer.params) }
-        })
+        const args: CompiledLayer['args'] = { out: new Float32Array(cells.length * 3), u, count: cells.length, t: 0, p: prepareParams(def, layer.params) }
+        if (def.id === 'image') {
+          const id = String(layer.params.image ?? '')
+          const asset = show.images[id]
+          if (asset) {
+            args.image = { width: asset.width, height: asset.height, pixels: imagePixels(id, asset) }
+            Object.assign(args, mapImage(show, patch, layer))
+          }
+        }
+        compiled.push({ def, cells, blend: layer.blend, opacity: Math.min(1, Math.max(0, layer.opacity)), args })
       }
       this.layers.set(look.id, compiled)
     }
