@@ -1,0 +1,12 @@
+node_modules/
+out/
+dist/
+.DS_Store
+*.log
+
+# IDE
+.idea/
+*.iml
+
+# Private project briefing
+CLAUDE.md
