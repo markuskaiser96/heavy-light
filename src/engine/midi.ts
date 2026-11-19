@@ -14,7 +14,11 @@ export class MidiInputs {
   private timer: NodeJS.Timeout | null = null
   virtualPort: string | null = null
 
-  constructor(private onEvent: (event: MidiEvent) => void) {}
+  constructor(
+    private onEvent: (event: MidiEvent) => void,
+    /** MIDI clock: 24 ticks per beat while the sender's transport runs, and a stop when it halts. */
+    private onClock: (port: string, kind: 'tick' | 'stop', time: number) => void = () => {}
+  ) {}
 
   get ports(): string[] {
     return this.open.map((p) => p.name)
@@ -80,8 +84,13 @@ export class MidiInputs {
   }
 
   private listen(input: Input, port: string): void {
+    // Let MIDI clock through (the library drops it by default); system exclusive and active sensing stay out.
+    input.ignoreTypes(true, false, true)
     input.on('message', (_delta, message) => {
       const time = performance.now()
+      if (message[0] === 0xf8) return this.onClock(port, 'tick', time)
+      if (message[0] === 0xfc) return this.onClock(port, 'stop', time)
+      if (message[0] >= 0xf0) return
       const status = message[0] & 0xf0
       const channel = (message[0] & 0x0f) + 1
       const data1 = message[1] ?? 0

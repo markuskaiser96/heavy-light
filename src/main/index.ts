@@ -52,6 +52,8 @@ function createWindow(): void {
     titleBarStyle: mac ? 'hiddenInset' : 'default',
     trafficLightPosition: mac ? { x: 16, y: 18 } : undefined,
     autoHideMenuBar: true,
+    // A screenshot run stays in the background, so nobody clicks into it by accident.
+    show: !process.env.HEAVYLIGHT_SHOT,
     webPreferences: { preload: join(__dirname, '../preload/index.js'), contextIsolation: true, sandbox: true }
   })
 

@@ -9,7 +9,10 @@ import { MidiInputs } from './midi'
 const parent = process.parentPort
 
 const engine = new Engine({ emit: (message) => parent.postMessage(message) })
-const midi = new MidiInputs((event) => engine.handleMidi(event))
+const midi = new MidiInputs(
+  (event) => engine.handleMidi(event),
+  (port, kind, time) => engine.handleClock(port, kind, time)
+)
 
 engine.midiPorts = () => midi.ports
 try {

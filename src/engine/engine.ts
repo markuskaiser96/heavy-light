@@ -37,12 +37,24 @@ interface Running extends Playing {
   previous: number
   stepStartedAt: number
   previousStartedAt: number
+  /** Beats played of the current step. */
+  beat: number
+  /** When `beat` was last moved on, and where the MIDI clock stood then (null while the chaser runs at its own tempo). */
+  movedAt: number
+  clockAt: number | null
   direction: 1 | -1
   /** Steps played so far, including the current one. */
   played: number
   /** A chaser that does not loop has reached its end. */
   done: boolean
 }
+
+/** MIDI clock sends this many ticks per quarter note. */
+const TICKS_PER_BEAT = 24
+/** Without a tick for this long (ms) the clock counts as stopped. The slowest tempo, 20 bpm, ticks every 125 ms. */
+const CLOCK_TIMEOUT = 500
+/** Shortest step, in beats. */
+const MIN_STEP = 0.01
 
 export interface EngineOptions {
   emit: (message: FromEngine) => void
@@ -77,6 +89,8 @@ export class Engine {
   private previewId: string | null = null
   private previewRun: Running | null = null
   private previewStart = 0
+  /** The MIDI clock being followed: who sends it, ticks counted, time of the last one, smoothed time between ticks. */
+  private clock = { port: '', ticks: 0, lastAt: -Infinity, interval: 0, steady: 0 }
   private master = 1
   private blackout = false
   private output = true
@@ -179,6 +193,64 @@ export class Engine {
     }
     // Render and send immediately: a note must not wait up to one frame period (that would be jitter).
     if (matched && this.running) this.tick(performance.now(), event.time)
+  }
+
+  /**
+   * MIDI clock from the DAW. Chasers set to follow it count their steps in these ticks, so they
+   * keep in time through tempo changes. Only the first port that sends a clock is followed.
+   */
+  handleClock(port: string, kind: 'tick' | 'stop', time: number): void {
+    const c = this.clock
+    const receiving = time - c.lastAt < CLOCK_TIMEOUT
+    if (receiving && port !== c.port) return
+    if (kind === 'stop') {
+      c.lastAt = -Infinity
+      return
+    }
+    if (!receiving) {
+      c.port = port
+      c.steady = 1
+    } else {
+      const gap = time - c.lastAt
+      // Smoothed, so the jitter of single ticks does not make the tempo wobble.
+      c.interval = c.steady === 1 ? gap : c.interval + (gap - c.interval) * 0.15
+      c.steady++
+    }
+    c.ticks++
+    c.lastAt = time
+    if (!this.running || !this.clockUsable(time)) return
+    // A step that ends on this tick changes now, not at the next frame.
+    const position = this.clockBeats(time)
+    const due = (chaser: Chaser | undefined, r: Running | null): boolean =>
+      !!chaser && !!r && chaser.tempo === 'midi' && r.clockAt !== null && r.beat + position - r.clockAt >= stepBeats(chaser, r.index) - 1e-6
+    if ([...this.runs].some(([id, r]) => due(this.chasers.get(id), r)) || due(this.chasers.get(this.previewId ?? ''), this.previewRun)) this.tick(performance.now())
+  }
+
+  /** True once enough ticks have arrived to know the tempo, and they keep coming. */
+  private clockUsable(now: number): boolean {
+    return this.clock.steady >= 3 && now - this.clock.lastAt < CLOCK_TIMEOUT
+  }
+
+  /** Position of the MIDI clock in beats, carried on smoothly between two ticks. */
+  private clockBeats(now: number): number {
+    const c = this.clock
+    return (c.ticks + Math.min(1, Math.max(0, (now - c.lastAt) / c.interval))) / TICKS_PER_BEAT
+  }
+
+  /** Moves a chaser on to where it should be at `now`, at its own tempo or along the MIDI clock. */
+  private run(chaser: Chaser, r: Running, now: number, loop: boolean): void {
+    const own = 60000 / Math.max(1, chaser.bpm)
+    let beats = Math.max(0, now - r.movedAt) / own
+    let beatLength = own
+    if (chaser.tempo === 'midi' && this.clockUsable(now)) {
+      const position = this.clockBeats(now)
+      // The frame in which the clock takes over still counts at the chaser's own tempo.
+      if (r.clockAt !== null) beats = Math.max(0, position - r.clockAt)
+      r.clockAt = position
+      beatLength = this.clock.interval * TICKS_PER_BEAT
+    } else r.clockAt = null
+    r.movedAt = now
+    advance(chaser, r, beats, now, loop, beatLength)
   }
 
   private isOn(id: string): boolean {
@@ -285,7 +357,7 @@ export class Engine {
         this.runs.delete(id)
         continue
       }
-      advance(chaser, r, now, chaser.loop)
+      this.run(chaser, r, now, chaser.loop)
       if (!fade(r, chaser, dt)) this.runs.delete(id)
       else this.showStep(chaser, r, now, r.fade * r.intensity)
     }
@@ -294,7 +366,7 @@ export class Engine {
       if (chaser) {
         // In the editor a chaser always loops, so every step can be judged.
         this.previewRun ??= startRun(chaser, now, 1, 1)
-        advance(chaser, this.previewRun, now, true)
+        this.run(chaser, this.previewRun, now, true)
         this.showStep(chaser, this.previewRun, now, 1)
       } else {
         this.previewRun = null
@@ -347,7 +419,7 @@ export class Engine {
     const step = chaser.steps[r.index]
     if (!step) return
     const share = Math.min(1, chaser.crossfade)
-    const x = share > 0 && r.previous >= 0 ? Math.min(1, (now - r.stepStartedAt) / (stepLength(chaser, r.index) * share)) : 1
+    const x = share > 0 && r.previous >= 0 ? Math.min(1, r.beat / (stepBeats(chaser, r.index) * share)) : 1
     this.showLook(step.lookId, level * x, (now - r.stepStartedAt) / 1000)
     const previous = chaser.steps[r.previous]
     if (x < 1 && previous) this.showLook(previous.lookId, level * (1 - x), (now - r.previousStartedAt) / 1000)
@@ -400,6 +472,7 @@ export class Engine {
       fps: this.fps,
       packetsPerSecond: this.pps,
       midiPorts: this.midiPorts(),
+      clock: this.clockUsable(performance.now()) ? { bpm: 60000 / (this.clock.interval * TICKS_PER_BEAT), port: this.clock.port } : null,
       virtualPort: this.virtualPort,
       targets: this.universes.map((u) => ({ host: u.host, universe: u.universe, channels: u.channels, error: u.error })),
       latency: this.latency.summary(),
@@ -426,31 +499,36 @@ function startRun(chaser: Chaser, now: number, fadeFrom: number, intensity: numb
     previous: -1,
     stepStartedAt: now,
     previousStartedAt: now,
+    beat: 0,
+    movedAt: now,
+    clockAt: null,
     direction: 1,
     played: 1,
     done: false
   }
 }
 
-/** Length of a step in milliseconds. */
-function stepLength(chaser: Chaser, index: number): number {
-  const beat = 60000 / Math.max(1, chaser.bpm)
-  return Math.max(10, (chaser.steps[index]?.beats ?? 1) * beat)
+/** Length of a step in beats. */
+function stepBeats(chaser: Chaser, index: number): number {
+  return Math.max(MIN_STEP, chaser.steps[index]?.beats ?? 1)
 }
 
 /**
- * Moves a chaser on to the step that is due at `now`. Step starts are derived from the previous
- * step's start, not from `now`, so the chaser keeps its tempo no matter when frames happen.
+ * Moves a chaser on by `beats`. What is left over when a step ends counts towards the next one,
+ * so the chaser keeps its tempo no matter when frames happen. `beatLength` is the current length
+ * of a beat in milliseconds.
  */
-function advance(chaser: Chaser, r: Running, now: number, loop: boolean): void {
+function advance(chaser: Chaser, r: Running, beats: number, now: number, loop: boolean, beatLength: number): void {
   const n = chaser.steps.length
   if (n === 0) return
   if (r.index >= n) r.index = 0
+  r.beat += beats
   for (let guard = 0; !r.done; guard++) {
-    const length = stepLength(chaser, r.index)
-    if (now < r.stepStartedAt + length) break
+    const length = stepBeats(chaser, r.index)
+    if (r.beat < length - 1e-6) break
     if (guard > 2000) {
       // Far behind, e.g. the computer was asleep: carry on from here.
+      r.beat = 0
       r.stepStartedAt = now
       break
     }
@@ -460,10 +538,11 @@ function advance(chaser: Chaser, r: Running, now: number, loop: boolean): void {
       r.on = false
       break
     }
+    r.beat = Math.max(0, r.beat - length)
     r.previous = r.index
     r.previousStartedAt = r.stepStartedAt
     r.index = next
-    r.stepStartedAt += length
+    r.stepStartedAt = now - r.beat * beatLength
     r.played++
   }
 }

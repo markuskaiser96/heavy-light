@@ -6,6 +6,7 @@ import { EFFECTS, prepareParams, defaultParams } from '../src/shared/effects'
 import { makeGenericPixelFixture, resolveMode, type OflFixture } from '../src/shared/ofl'
 import { encodeImage } from '../src/shared/images'
 import { autoPlane, compilePatch, layoutSegments, mapImage, mapLayer, toWorld } from '../src/shared/patch'
+import { newProp, propBox, PROP_TYPES } from '../src/shared/props'
 import { demoShow, emptyShow, newChaser, newLayer, newLook, newStep, normalizeShow, LIBRARY } from '../src/shared/show'
 import type { FromEngine, Show } from '../src/shared/types'
 
@@ -139,6 +140,37 @@ describe('show files', () => {
     const show = demoShow()
     expect(normalizeShow(JSON.parse(JSON.stringify(show)))).toEqual(show)
     expect(() => normalizeShow({ hello: 1 })).toThrow('not a HeavyLight show')
+  })
+
+  it('opens shows saved before look folders and clock-following chasers existed', () => {
+    const old = JSON.parse(JSON.stringify(demoShow()))
+    delete old.lookFolders
+    for (const c of old.chasers) delete c.tempo
+    const show = normalizeShow(old)
+    expect(show.lookFolders).toEqual([])
+    expect(show.chasers.map((c) => c.tempo)).toEqual(['own', 'own'])
+  })
+
+  it('opens shows saved before stage objects existed and drops objects of an unknown kind', () => {
+    const { props: _props, ...old } = demoShow()
+    expect(normalizeShow(JSON.parse(JSON.stringify(old))).props).toEqual([])
+    const show = { ...emptyShow(), props: [{ id: 'a', name: 'Riser', kind: 'riser', position: { x: 1 } }, { id: 'b', name: 'Fog', kind: 'fog-machine' }] }
+    expect(normalizeShow(JSON.parse(JSON.stringify(show))).props).toEqual([{ ...newProp('riser', 'a', 'Riser'), position: { x: 1, y: 0, z: 0 } }])
+  })
+})
+
+describe('stage objects', () => {
+  it('stand on their position: the box starts at the underside', () => {
+    for (const type of PROP_TYPES) {
+      const box = propBox(newProp(type.kind, 'p', type.label))
+      expect(box.centre[1] - box.size[1] / 2).toBeCloseTo(0)
+    }
+  })
+
+  it('scale a musician with the body height, a riser with its own size', () => {
+    const tall = propBox({ ...newProp('drummer', 'p', 'Drums'), size: { w: 0, h: 3.5, d: 0 } })
+    expect(tall.size).toEqual([3.8, 3.5, 3.4])
+    expect(propBox({ ...newProp('riser', 'p', 'Riser'), size: { w: 3, h: 0.2, d: 1 } }).size).toEqual([3, 0.2, 1])
   })
 })
 
@@ -286,6 +318,35 @@ describe('engine', () => {
     show.chasers = [{ ...newChaser('Chase', 0), id: 'chase', bpm: 600, fadeOut: 0, midi: { channel: 0, note: 72 }, steps: [newStep('red', 1), newStep('blue', 2), newStep('', 1)], ...patch }]
     return show
   }
+  it('lets a chaser follow the MIDI clock instead of its own tempo', async () => {
+    // Its own tempo is far too slow: 20 bpm, three seconds a beat. The clock runs at about 250 bpm.
+    const { engine, messages, wait } = await rig(twoLooks({ tempo: 'midi', bpm: 20 }))
+    const clock = setInterval(() => engine.handleClock('daw', 'tick', performance.now()), 10)
+    try {
+      await wait(150)
+      engine.handleMidi({ port: 'daw', kind: 'noteon', channel: 1, note: 72, velocity: 100, time: performance.now() })
+      const step = () => messages.flatMap((m) => (m.type === 'status' ? [m.status] : [])).at(-1)!.chasers[0]?.step
+      await wait(130)
+      expect(step()).toBe(0)
+      // One beat is 24 ticks, about a quarter of a second: by now the second step (two beats) plays.
+      await wait(330)
+      expect(step()).toBe(1)
+      const status = messages.flatMap((m) => (m.type === 'status' ? [m.status] : [])).at(-1)!
+      expect(status.clock?.port).toBe('daw')
+      expect(status.clock!.bpm).toBeGreaterThan(150)
+      expect(status.clock!.bpm).toBeLessThan(260)
+
+      // The clock stops: the chaser carries on at its own slow tempo and the status says so.
+      clearInterval(clock)
+      engine.handleClock('daw', 'stop', performance.now())
+      await wait(250)
+      expect(messages.flatMap((m) => (m.type === 'status' ? [m.status] : [])).at(-1)!.clock).toBeNull()
+      expect(step()).toBe(1)
+    } finally {
+      clearInterval(clock)
+    }
+  })
+
   // First pixel as R, G, B (the strip is GRB and starts at address 11).
   const pixel = (packet: Buffer) => [packet[18 + 11], packet[18 + 10], packet[18 + 12]]
 

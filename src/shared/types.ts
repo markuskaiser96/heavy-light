@@ -28,6 +28,21 @@ export interface FixtureInstance {
   size: { w: number; h: number }
 }
 
+export type PropKind = 'singer' | 'guitarist' | 'bassist' | 'keyboardist' | 'drummer' | 'riser' | 'monitor' | 'truss'
+
+/** Scenery in the 3D view: musicians, risers, monitors, truss. Only there to make the preview readable; never sent anywhere. */
+export interface StageProp {
+  id: string
+  name: string
+  kind: PropKind
+  /** Middle of the underside in metres, so y = 0 stands on the floor. */
+  position: Vec3
+  /** Euler angles in degrees, XYZ order. Unrotated, musicians face the audience and a monitor faces the band. */
+  rotation: Vec3
+  /** Width, height, depth in metres. Musicians only use the height. */
+  size: { w: number; h: number; d: number }
+}
+
 export interface Group {
   id: string
   name: string
@@ -103,6 +118,13 @@ export interface Triggerable {
 
 export interface Look extends Triggerable {
   layers: Layer[]
+  /** Id of the folder it is filed in (Show.lookFolders). Absent = not in a folder. Folders only organise the list. */
+  folder?: string
+}
+
+export interface LookFolder {
+  id: string
+  name: string
 }
 
 export interface ChaserStep {
@@ -118,6 +140,8 @@ export type ChaserOrder = 'forward' | 'backward' | 'pingpong' | 'random'
 /** Plays looks one after the other, in time with a tempo. Starts at its first step whenever it is triggered. */
 export interface Chaser extends Triggerable {
   steps: ChaserStep[]
+  /** own: runs at `bpm`. midi: follows the MIDI clock of the DAW, and falls back to `bpm` while no clock arrives. */
+  tempo: 'own' | 'midi'
   bpm: number
   /** Share of each step (0..1) spent fading over from the previous step. 0 = hard cut. */
   crossfade: number
@@ -133,7 +157,9 @@ export interface Show {
   definitions: Record<string, OflFixture>
   fixtures: FixtureInstance[]
   groups: Group[]
+  props: StageProp[]
   looks: Look[]
+  lookFolders: LookFolder[]
   chasers: Chaser[]
   images: Record<string, ImageAsset>
   stage: { width: number; depth: number }
@@ -197,6 +223,8 @@ export interface EngineStatus {
   fps: number
   packetsPerSecond: number
   midiPorts: string[]
+  /** Tempo of the MIDI clock being received, or null if there is none. */
+  clock: { bpm: number; port: string } | null
   virtualPort: string | null
   targets: OutputTarget[]
   /** MIDI note received → last Art-Net packet handed to the OS. */

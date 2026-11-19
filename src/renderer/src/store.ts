@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { demoShow, emptyShow, normalizeShow } from '@shared/show'
-import type { Chaser, EngineStatus, FixtureInstance, Layer, Look, MidiEvent, Show } from '@shared/types'
+import type { Chaser, EngineStatus, FixtureInstance, Layer, Look, MidiEvent, Show, StageProp } from '@shared/types'
 import type { HeavyApi } from '../../preload'
 
 declare global {
@@ -43,7 +43,11 @@ interface State {
   /** Widths of the side panels in pixels. */
   panels: Record<PanelName, number>
   selectedFixtures: string[]
+  /** Selected stage objects (musicians, risers …). Can be selected together with fixtures. */
+  selectedProps: string[]
   lookId: string | null
+  /** Look folders shown collapsed. Not part of the show. */
+  closedFolders: string[]
   layerId: string | null
   chaserId: string | null
   /** Send the look or chaser being edited to the stage. */
@@ -63,7 +67,10 @@ interface State {
   redo: () => void
   setView: (view: View) => void
   setPanel: (panel: PanelName, width: number) => void
+  /** Selects these fixtures and nothing else. */
   selectFixtures: (ids: string[]) => void
+  /** Selects these stage objects and nothing else. */
+  selectProps: (ids: string[]) => void
   selectLook: (id: string | null) => void
   selectLayer: (id: string | null) => void
   selectChaser: (id: string | null) => void
@@ -80,7 +87,9 @@ export const useStore = create<State>((set, get) => ({
   view: initialView,
   panels: storedPanels(),
   selectedFixtures: [],
+  selectedProps: [],
   lookId: null,
+  closedFolders: [],
   layerId: null,
   chaserId: null,
   preview: true,
@@ -130,7 +139,8 @@ export const useStore = create<State>((set, get) => ({
       /* the layout just is not remembered */
     }
   },
-  selectFixtures: (ids) => set({ selectedFixtures: ids }),
+  selectFixtures: (ids) => set({ selectedFixtures: ids, selectedProps: [] }),
+  selectProps: (ids) => set({ selectedProps: ids, selectedFixtures: [] }),
   selectLook: (id) => {
     const look = get().show.looks.find((l) => l.id === id)
     set({ lookId: id, layerId: look?.layers[0]?.id ?? null, learning: false })
@@ -146,6 +156,7 @@ export const useStore = create<State>((set, get) => ({
       past: [],
       future: [],
       selectedFixtures: [],
+      selectedProps: [],
       lookId: show.looks[0]?.id ?? null,
       layerId: show.looks[0]?.layers[0]?.id ?? null,
       chaserId: show.chasers[0]?.id ?? null,
@@ -159,6 +170,9 @@ const { edit } = useStore.getState()
 
 export const editFixture = (id: string, patch: Partial<FixtureInstance>, key?: string): void =>
   edit((show) => ({ ...show, fixtures: show.fixtures.map((f) => (f.id === id ? { ...f, ...patch } : f)) }), key)
+
+export const editProp = (id: string, patch: Partial<StageProp>, key?: string): void =>
+  edit((show) => ({ ...show, props: show.props.map((p) => (p.id === id ? { ...p, ...patch } : p)) }), key)
 
 export const editLook = (id: string, patch: Partial<Look>, key?: string): void =>
   edit((show) => ({ ...show, looks: show.looks.map((l) => (l.id === id ? { ...l, ...patch } : l)) }), key)

@@ -22,10 +22,15 @@ unicast Art-Net is blocked by the system.
 
 - **Stage**: add fixtures (RGB pixel strips and matrices, or any Open Fixture Library JSON),
   set IP, universe and start address, and place them in 3D.
+  Stage objects (musicians with their instruments, risers, monitors, truss) make the 3D view easier to read;
+  they are scenery only. The selection moves with handles or keys: arrows on the floor (following the camera),
+  Alt+Up/Down for height, Q/E to turn, Shift for big steps, G/R for move/rotate handles, Delete, Cmd/Ctrl+D.
 - **Looks**: a look is one or more layers; each layer puts an effect on some fixtures.
-  A MIDI note plays a look ("Learn from MIDI" assigns it).
+  A MIDI note plays a look ("Learn from MIDI" assigns it). The list can be searched (name or note, Cmd/Ctrl+F)
+  and sorted into folders by drag and drop.
   The Image effect lays a picture over the fixtures and can move, spin and zoom it.
-- **Chasers**: run looks one after the other in tempo (beats and bpm), started by a MIDI note.
+- **Chasers**: run looks one after the other in tempo (beats and bpm), started by a MIDI note. A chaser can follow
+  the MIDI clock of the DAW instead of a fixed tempo; switch on sending clock for the HeavyLight output there.
 - **Live**: pads for every look, master, blackout, MIDI monitor and timing measurements.
 
 On macOS and Linux the app opens a virtual MIDI port named `HeavyLight`; pick it as MIDI output

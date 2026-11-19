@@ -6,10 +6,13 @@ import * as THREE from 'three'
 import { autoPlane, compilePatch, type Patch, type PatchedFixture } from '@shared/patch'
 import type { Plane, Vec3 } from '@shared/types'
 import { imageCanvas } from '../images'
+import { deleteSelection, duplicateSelection, moveSelection, place, roundPosition, toQuaternion, toRotation, turnSelection, type Placed } from '../placement'
 import { editLayer, frame, useStore } from '../store'
+import { StageProps } from './StageProps'
 
 const DEG = Math.PI / 180
 const MAX_LIGHTS = 16
+const ALT = navigator.platform.startsWith('Mac') ? '⌥' : 'Alt'
 /** sRGB byte → linear light, so the glow on screen fades like the real LEDs. */
 const LINEAR = Float32Array.from({ length: 256 }, (_, i) => Math.pow(i / 255, 2.2))
 
@@ -124,59 +127,10 @@ function Spill({ patch }: { patch: Patch }) {
   )
 }
 
-function FixtureBodies({ patch, editable, mode }: { patch: Patch; editable: boolean; mode: 'translate' | 'rotate' | 'scale' }) {
+/** Invisible boxes around the fixtures to click on, with an outline when hovered or selected. */
+function FixtureBodies({ patch, editable }: { patch: Patch; editable: boolean }) {
   const selected = useStore((s) => s.selectedFixtures)
-  const selectFixtures = useStore((s) => s.selectFixtures)
   const [hover, setHover] = useState<string | null>(null)
-  const [handle, setHandle] = useState<THREE.Group | null>(null)
-  const picked = editable ? patch.fixtures.filter((pf) => selected.includes(pf.fixture.id)).map((pf) => pf.fixture) : []
-  const single = picked.length === 1 ? picked[0] : null
-  // The drag handle sits in the middle of the selection. With one fixture it also takes on its rotation.
-  const centre = picked.reduce((sum, f) => sum.add(new THREE.Vector3(f.position.x, f.position.y, f.position.z)), new THREE.Vector3()).divideScalar(Math.max(1, picked.length))
-  /** Where the handle and the selected fixtures were when the drag began. */
-  const drag = useRef<{ position: THREE.Vector3; rotation: THREE.Quaternion; fixtures: Map<string, { position: Vec3; rotation: THREE.Quaternion }> } | null>(null)
-
-  const beginDrag = () => {
-    if (!handle) return
-    drag.current = {
-      position: handle.position.clone(),
-      rotation: handle.quaternion.clone(),
-      fixtures: new Map(
-        picked.map((f) => [f.id, { position: f.position, rotation: new THREE.Quaternion().setFromEuler(new THREE.Euler(f.rotation.x * DEG, f.rotation.y * DEG, f.rotation.z * DEG, 'XYZ')) }])
-      )
-    }
-  }
-
-  const applyDrag = () => {
-    const start = drag.current
-    if (!handle || !start) return
-    const round = (v: number, digits: number) => +v.toFixed(digits) || 0
-    const moved = handle.position.clone().sub(start.position)
-    const turned = handle.quaternion.clone().multiply(start.rotation.clone().invert())
-    const euler = new THREE.Euler()
-    useStore.getState().edit(
-      (show) => ({
-        ...show,
-        fixtures: show.fixtures.map((f) => {
-          const from = start.fixtures.get(f.id)
-          if (!from) return f
-          if (mode === 'translate') {
-            return { ...f, position: { x: round(from.position.x + moved.x, 3), y: round(from.position.y + moved.y, 3), z: round(from.position.z + moved.z, 3) } }
-          }
-          // Every fixture turns about its own centre.
-          euler.setFromQuaternion(turned.clone().multiply(from.rotation), 'XYZ')
-          return { ...f, rotation: { x: round(euler.x / DEG, 1), y: round(euler.y / DEG, 1), z: round(euler.z / DEG, 1) } }
-        })
-      }),
-      `drag-${mode}-${[...start.fixtures.keys()].join()}`
-    )
-  }
-
-  const endDrag = () => {
-    drag.current = null
-    // For several fixtures the handle only measures the turn; start the next drag from zero.
-    if (!single) handle?.quaternion.identity()
-  }
 
   return (
     <>
@@ -187,11 +141,13 @@ function FixtureBodies({ patch, editable, mode }: { patch: Patch; editable: bool
         return (
           <group key={id} position={[p.x, p.y, p.z]} rotation={[r.x * DEG, r.y * DEG, r.z * DEG]}>
             <mesh
+              userData={{ fixture: true }}
               onClick={(e) => {
                 if (!editable) return
                 e.stopPropagation()
-                if (e.shiftKey || e.metaKey || e.ctrlKey) selectFixtures(isSelected ? selected.filter((s) => s !== id) : [...selected, id])
-                else selectFixtures([id])
+                const s = useStore.getState()
+                if (e.shiftKey || e.metaKey || e.ctrlKey) s.set({ selectedFixtures: isSelected ? selected.filter((x) => x !== id) : [...selected, id] })
+                else s.selectFixtures([id])
               }}
               onPointerOver={(e) => {
                 if (!editable) return
@@ -212,30 +168,128 @@ function FixtureBodies({ patch, editable, mode }: { patch: Patch; editable: bool
           </group>
         )
       })}
-      {picked.length > 0 && (
-        <>
-          <group
-            ref={setHandle}
-            position={[centre.x, centre.y, centre.z]}
-            rotation={single ? [single.rotation.x * DEG, single.rotation.y * DEG, single.rotation.z * DEG] : [0, 0, 0]}
-          />
-          {handle && (
-            <TransformControls
-              object={handle}
-              mode={mode}
-              space={mode === 'rotate' && single ? 'local' : 'world'}
-              size={0.7}
-              rotationSnap={5 * DEG}
-              translationSnap={0.05}
-              onMouseDown={beginDrag}
-              onObjectChange={applyDrag}
-              onMouseUp={endDrag}
-            />
-          )}
-        </>
+    </>
+  )
+}
+
+/** Move and rotate handles for everything selected in the Stage tab: fixtures and stage objects together. */
+function SelectionHandle({ mode }: { mode: 'translate' | 'rotate' }) {
+  const fixtures = useStore((s) => s.show.fixtures)
+  const props = useStore((s) => s.show.props)
+  const selectedFixtures = useStore((s) => s.selectedFixtures)
+  const selectedProps = useStore((s) => s.selectedProps)
+  const [handle, setHandle] = useState<THREE.Group | null>(null)
+  const picked: Placed[] = [...fixtures.filter((f) => selectedFixtures.includes(f.id)), ...props.filter((p) => selectedProps.includes(p.id))]
+  const single = picked.length === 1 ? picked[0] : null
+  // The handle sits in the middle of the selection. With one thing selected it also takes on its rotation.
+  const centre = picked.reduce((sum, i) => sum.add(new THREE.Vector3(i.position.x, i.position.y, i.position.z)), new THREE.Vector3()).divideScalar(Math.max(1, picked.length))
+  /** Where the handle and the selected things were when the drag began. */
+  const drag = useRef<{ position: THREE.Vector3; rotation: THREE.Quaternion; items: Map<string, { position: Vec3; rotation: THREE.Quaternion }> } | null>(null)
+
+  const beginDrag = () => {
+    if (!handle) return
+    drag.current = {
+      position: handle.position.clone(),
+      rotation: handle.quaternion.clone(),
+      items: new Map(picked.map((i) => [i.id, { position: i.position, rotation: toQuaternion(i.rotation) }]))
+    }
+  }
+
+  const applyDrag = () => {
+    const start = drag.current
+    if (!handle || !start) return
+    const moved = handle.position.clone().sub(start.position)
+    const turned = handle.quaternion.clone().multiply(start.rotation.clone().invert())
+    const offset = new THREE.Vector3()
+    useStore.getState().edit(
+      (show) =>
+        place(show, (item) => {
+          const from = start.items.get(item.id)
+          if (!from) return undefined
+          if (mode === 'translate') return { position: roundPosition(from.position.x + moved.x, from.position.y + moved.y, from.position.z + moved.z), rotation: item.rotation }
+          // Several things turn together about the handle, like one rigid piece.
+          offset.set(from.position.x, from.position.y, from.position.z).sub(start.position).applyQuaternion(turned).add(start.position)
+          return { position: roundPosition(offset.x, offset.y, offset.z), rotation: toRotation(turned.clone().multiply(from.rotation)) }
+        }),
+      `drag-${mode}-${[...start.items.keys()].join()}`
+    )
+  }
+
+  const endDrag = () => {
+    drag.current = null
+    // For several things the handle only measures the turn; start the next drag from zero.
+    if (!single) handle?.quaternion.identity()
+  }
+
+  if (picked.length === 0) return null
+  return (
+    <>
+      <group
+        ref={setHandle}
+        position={[centre.x, centre.y, centre.z]}
+        rotation={single ? [single.rotation.x * DEG, single.rotation.y * DEG, single.rotation.z * DEG] : [0, 0, 0]}
+      />
+      {handle && (
+        <TransformControls
+          object={handle}
+          mode={mode}
+          space={mode === 'rotate' && single ? 'local' : 'world'}
+          size={0.7}
+          rotationSnap={5 * DEG}
+          translationSnap={0.05}
+          onMouseDown={beginDrag}
+          onObjectChange={applyDrag}
+          onMouseUp={endDrag}
+        />
       )}
     </>
   )
+}
+
+/**
+ * Keyboard control of the selection in the Stage tab. Arrow keys follow the screen: left and right
+ * move across the view, up and down move away from and towards the camera, always along a stage axis.
+ */
+function StageKeys({ onMode }: { onMode: (mode: 'translate' | 'rotate') => void }) {
+  const camera = useThree((s) => s.camera)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target
+      if (t instanceof HTMLInputElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return
+      const s = useStore.getState()
+      if (s.view !== 'stage' || s.selectedFixtures.length + s.selectedProps.length === 0) return
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key
+      const mod = e.metaKey || e.ctrlKey
+      const step = e.shiftKey ? 0.5 : 0.05
+      let handled = true
+
+      if (mod && key === 'd') duplicateSelection()
+      else if (mod) handled = false
+      else if (key === 'Delete' || key === 'Backspace') deleteSelection()
+      else if (key === 'Escape') s.set({ selectedFixtures: [], selectedProps: [] })
+      else if (key === 'PageUp' || (e.altKey && key === 'ArrowUp')) moveSelection({ x: 0, y: step, z: 0 })
+      else if (key === 'PageDown' || (e.altKey && key === 'ArrowDown')) moveSelection({ x: 0, y: -step, z: 0 })
+      else if (key.startsWith('Arrow') && !e.altKey) {
+        // Which stage axis points away from the camera? From straight above, the top of the screen counts.
+        const away = camera.getWorldDirection(new THREE.Vector3())
+        if (Math.hypot(away.x, away.z) < 0.05) away.set(0, 1, 0).applyQuaternion(camera.quaternion)
+        const forward = Math.abs(away.x) > Math.abs(away.z) ? { x: Math.sign(away.x), z: 0 } : { x: 0, z: Math.sign(away.z) }
+        const right = { x: -forward.z, z: forward.x }
+        const along = key === 'ArrowUp' ? forward : key === 'ArrowDown' ? { x: -forward.x, z: -forward.z } : key === 'ArrowRight' ? right : { x: -right.x, z: -right.z }
+        moveSelection({ x: along.x * step, y: 0, z: along.z * step })
+      } else if (e.altKey) handled = false
+      else if (key === 'q') turnSelection(e.shiftKey ? 90 : 15)
+      else if (key === 'e') turnSelection(e.shiftKey ? -90 : -15)
+      else if (key === 'g') onMode('translate')
+      else if (key === 'r') onMode('rotate')
+      else handled = false
+
+      if (handled) e.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [camera, onMode])
+  return null
 }
 
 /** The image layer being edited in the Looks tab, if any. */
@@ -347,6 +401,49 @@ function StageFloor() {
       <lineSegments geometry={outline} position={[0, 0.002, 0]}>
         <lineBasicMaterial color="#3a3f55" />
       </lineSegments>
+      <FrontMark width={width} depth={depth} />
+    </>
+  )
+}
+
+/** Marks the downstage edge: a lit strip along it and "Audience" written on the floor in front. */
+function FrontMark({ width, depth }: { width: number; depth: number }) {
+  const texture = useMemo(() => {
+    const canvas = document.createElement('canvas')
+    canvas.width = 1024
+    canvas.height = 128
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#8f95ab'
+    ctx.font = '600 56px system-ui, sans-serif'
+    ctx.letterSpacing = '18px'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('AUDIENCE', 512 + 9, 64)
+    // Arrowheads pointing away from the stage, left and right of the word.
+    for (const x of [200, 824]) {
+      ctx.beginPath()
+      ctx.moveTo(x - 26, 44)
+      ctx.lineTo(x + 26, 44)
+      ctx.lineTo(x, 86)
+      ctx.fill()
+    }
+    const t = new THREE.CanvasTexture(canvas)
+    t.colorSpace = THREE.SRGBColorSpace
+    t.anisotropy = 8
+    return t
+  }, [])
+  useEffect(() => () => texture.dispose(), [texture])
+  const length = Math.min(width, 4)
+  return (
+    <>
+      <mesh position={[0, 0.003, depth / 2 - 0.02]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[width, 0.04]} />
+        <meshBasicMaterial color="#9c6a26" toneMapped={false} />
+      </mesh>
+      <mesh position={[0, 0.001, depth / 2 + 0.2 + length / 16]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[length, length / 8]} />
+        <meshBasicMaterial map={texture} transparent opacity={0.75} depthWrite={false} toneMapped={false} />
+      </mesh>
     </>
   )
 }
@@ -375,8 +472,9 @@ function CameraRig({ preset }: { preset: { name: CameraName; n: number } }) {
 export function Stage3D() {
   const patch = usePatch()
   const editable = useStore((s) => s.view === 'stage')
-  const selected = useStore((s) => s.selectedFixtures.length)
-  const selectFixtures = useStore((s) => s.selectFixtures)
+  const selected = useStore((s) => s.selectedFixtures.length + s.selectedProps.length)
+  const set = useStore((s) => s.set)
+  const props = useStore((s) => s.show.props.length)
   const [mode, setMode] = useState<'translate' | 'rotate' | 'scale'>('translate')
   const frameEditing = useImageLayer()?.layer.plane !== undefined
   const [preset, setPreset] = useState<{ name: CameraName; n: number }>({ name: 'front', n: 0 })
@@ -386,7 +484,7 @@ export function Stage3D() {
       <Canvas
         camera={{ position: [0, 3.4, 9.5], fov: 38, near: 0.1, far: 200 }}
         dpr={[1, 2]}
-        onPointerMissed={() => editable && selectFixtures([])}
+        onPointerMissed={() => editable && set({ selectedFixtures: [], selectedProps: [] })}
       >
         <color attach="background" args={['#06070b']} />
         <fog attach="fog" args={['#06070b', 14, 40]} />
@@ -395,7 +493,10 @@ export function Stage3D() {
         <StageFloor />
         <Pixels patch={patch} />
         <Spill patch={patch} />
-        <FixtureBodies patch={patch} editable={editable} mode={mode === 'scale' ? 'translate' : mode} />
+        <StageProps editable={editable} />
+        <FixtureBodies patch={patch} editable={editable} />
+        {editable && <SelectionHandle mode={mode === 'scale' ? 'translate' : mode} />}
+        <StageKeys onMode={setMode} />
         <ImageFrame patch={patch} mode={mode} />
         <OrbitControls makeDefault target={[0, 0.7, 0]} maxPolarAngle={Math.PI / 2 - 0.01} minDistance={1.5} maxDistance={40} />
         <CameraRig preset={preset} />
@@ -414,10 +515,10 @@ export function Stage3D() {
         </div>
         {((editable && selected > 0) || frameEditing) && (
           <div className="segmented" role="group" aria-label="Drag handle">
-            <button className={mode === 'translate' || (mode === 'scale' && !frameEditing) ? 'on' : ''} onClick={() => setMode('translate')}>
+            <button className={mode === 'translate' || (mode === 'scale' && !frameEditing) ? 'on' : ''} title={editable ? 'Move handles (G)' : undefined} onClick={() => setMode('translate')}>
               Move
             </button>
-            <button className={mode === 'rotate' ? 'on' : ''} onClick={() => setMode('rotate')}>
+            <button className={mode === 'rotate' ? 'on' : ''} title={editable ? 'Rotate handles (R)' : undefined} onClick={() => setMode('rotate')}>
               Rotate
             </button>
             {frameEditing && (
@@ -428,7 +529,16 @@ export function Stage3D() {
           </div>
         )}
       </div>
-      {patch.cellCount === 0 && (
+      {editable && selected > 0 && (
+        <div className="stage-keys">
+          <span><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> move on the floor</span>
+          <span><kbd>{ALT}</kbd><kbd>↑</kbd><kbd>↓</kbd> height</span>
+          <span><kbd>Q</kbd><kbd>E</kbd> turn</span>
+          <span><kbd>Shift</kbd> big steps</span>
+          <span><kbd>G</kbd><kbd>R</kbd> move / rotate handles</span>
+        </div>
+      )}
+      {patch.cellCount === 0 && props === 0 && (
         <div className="stage-empty">
           <p>The stage is empty.</p>
           <p className="muted">Add your first fixture in the Stage tab to see it here.</p>

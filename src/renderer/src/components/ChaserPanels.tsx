@@ -4,7 +4,7 @@ import { LOOK_COLORS, newChaser, newId, newStep } from '@shared/show'
 import type { Chaser, ChaserOrder, ChaserStep } from '@shared/types'
 import { editChaser, useStore } from '../store'
 import { midiLabel, TriggerEditor } from './LookPanels'
-import { Field, NumberInput, Section, Select, Slider, TextInput, Toggle } from './ui'
+import { Field, NumberInput, Section, Segmented, Select, Slider, TextInput, Toggle } from './ui'
 
 const ORDERS: { value: ChaserOrder; label: string }[] = [
   { value: 'forward', label: 'First to last' },
@@ -74,11 +74,11 @@ function TapTempo({ onTempo }: { onTempo: (bpm: number) => void }) {
   )
 }
 
-function Steps({ chaser, current }: { chaser: Chaser; current: number | null }) {
+function Steps({ chaser, current, bpm }: { chaser: Chaser; current: number | null; bpm: number }) {
   const looks = useStore((s) => s.show.looks)
   const setSteps = (steps: ChaserStep[]) => editChaser(chaser.id, { steps })
   const beats = chaser.steps.reduce((sum, step) => sum + step.beats, 0)
-  const seconds = (beats * 60) / Math.max(1, chaser.bpm)
+  const seconds = (beats * 60) / Math.max(1, bpm)
   const options = [{ value: '', label: 'Dark' }, ...looks.map((l) => ({ value: l.id, label: l.name }))]
 
   const add = () => {
@@ -133,7 +133,7 @@ function Steps({ chaser, current }: { chaser: Chaser; current: number | null }) 
       </ol>
       {chaser.steps.length > 0 && (
         <p className="summary">
-          One pass is {+beats.toFixed(2)} beat{beats === 1 ? '' : 's'}, or {seconds.toFixed(2)} s at {chaser.bpm} bpm.
+          One pass is {+beats.toFixed(2)} beat{beats === 1 ? '' : 's'}, or {seconds.toFixed(2)} s at {+bpm.toFixed(1)} bpm.
         </p>
       )}
     </Section>
@@ -157,6 +157,8 @@ export function ChaserEditor() {
   }
 
   const change = (patch: Partial<Chaser>, key?: string) => editChaser(chaser.id, patch, key && `${key}-${chaser.id}`)
+  const clock = status?.clock ?? null
+  const following = chaser.tempo === 'midi'
   const current = preview ? (status?.previewStep ?? null) : (status?.chasers.find((r) => r.chaserId === chaser.id)?.step ?? null)
 
   return (
@@ -205,12 +207,35 @@ export function ChaserEditor() {
       </Section>
 
       <Section title="Tempo">
+        <Segmented
+          value={chaser.tempo}
+          onChange={(tempo) => change({ tempo })}
+          options={[
+            { value: 'own', label: 'Own tempo' },
+            { value: 'midi', label: 'Follow MIDI clock' }
+          ]}
+        />
+        {following && (
+          <div className={`clock-state${clock ? ' on' : ''}`}>
+            <span className="dot" />
+            {clock ? (
+              <>
+                <strong>{clock.bpm.toFixed(1)} bpm</strong> <span className="muted">from {clock.port}</span>
+              </>
+            ) : (
+              <span>No MIDI clock arriving</span>
+            )}
+          </div>
+        )}
+        {following && <span className="field-label">Tempo while no clock arrives</span>}
         <div className="tempo">
           <NumberInput value={chaser.bpm} min={20} max={400} step={1} unit="bpm" onChange={(bpm) => change({ bpm }, 'bpm')} />
           <TapTempo onTempo={(bpm) => change({ bpm: Math.min(400, Math.max(20, bpm)) }, 'bpm')} />
         </div>
         <p className="summary">
-          Use the tempo of the song in Reaper. The chaser starts on its first step the moment its note arrives, so it stays on the beat.
+          {following
+            ? 'Steps are counted in the clock ticks of the DAW, so the chaser follows every tempo change of the song. It still starts on its first step the moment its note arrives. Switch on sending MIDI clock for the HeavyLight output in the DAW; while none arrives, the tempo above is used.'
+            : 'Use the tempo of the song in Reaper. The chaser starts on its first step the moment its note arrives, so it stays on the beat.'}
         </p>
         <div className="form-grid">
           <Field label="Order" wide>
@@ -230,7 +255,7 @@ export function ChaserEditor() {
         </div>
       </Section>
 
-      <Steps chaser={chaser} current={current} />
+      <Steps chaser={chaser} current={current} bpm={following && clock ? clock.bpm : chaser.bpm} />
 
       <TriggerEditor item={chaser} onEdit={(patch, key) => editChaser(chaser.id, patch, key)} />
     </aside>

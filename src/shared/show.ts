@@ -1,6 +1,7 @@
 import { defaultParams } from './effects'
 import { encodeImage, isImageAsset } from './images'
 import { genericPixelKey, isOflFixture, makeGenericPixelFixture, type OflFixture } from './ofl'
+import { isPropKind, newProp, propType } from './props'
 import type { Chaser, ChaserStep, FixtureInstance, ImageAsset, Layer, Look, Show } from './types'
 import drgbFader from './library/drgb-fader.json'
 import ledBar from './library/led-bar-240-8.json'
@@ -32,7 +33,9 @@ export function emptyShow(): Show {
     definitions: {},
     fixtures: [],
     groups: [],
+    props: [],
     looks: [],
+    lookFolders: [],
     chasers: [],
     images: {},
     stage: { width: 8, depth: 5 },
@@ -69,6 +72,7 @@ export function newChaser(name: string, index: number): Chaser {
     name,
     color: LOOK_COLORS[(index + 3) % LOOK_COLORS.length],
     steps: [],
+    tempo: 'own',
     bpm: 120,
     crossfade: 0,
     order: 'forward',
@@ -105,7 +109,11 @@ export function normalizeShow(value: unknown): Show {
       size: { ...DEFAULT_SIZE, ...f.size }
     })),
     groups: raw.groups ?? [],
+    props: (raw.props ?? [])
+      .filter((p) => isPropKind(p.kind))
+      .map((p) => ({ ...p, position: { ...ORIGIN, ...p.position }, rotation: { ...ORIGIN, ...p.rotation }, size: { ...propType(p.kind).size, ...p.size } })),
     looks: (raw.looks ?? []).map((l, i) => ({ ...newLook(l.name ?? 'Look', i), ...l, layers: (l.layers ?? []).map((layer) => ({ ...newLayer(layer.effect), ...layer })) })),
+    lookFolders: (raw.lookFolders ?? []).filter((f) => typeof f?.id === 'string' && typeof f.name === 'string'),
     chasers: (raw.chasers ?? []).map((c, i) => ({ ...newChaser(c.name ?? 'Chaser', i), ...c, steps: (c.steps ?? []).map((step) => ({ ...newStep(''), ...step })) })),
     stage: { ...base.stage, ...raw.stage },
     settings: { ...base.settings, ...raw.settings }
@@ -174,6 +182,19 @@ export function demoShow(): Show {
     { id: 'g-even', name: 'Even', fixtureIds: ids.filter((_, i) => i % 2 === 1) }
   ]
 
+  // The band, so the preview shows the lights in proportion: drums on a riser, three up front, wedges at the stage edge.
+  show.props = [
+    newProp('riser', 'prop-riser', 'Drum riser', { z: -0.2 }),
+    newProp('drummer', 'prop-drums', 'Drums', { y: 0.4, z: -0.55 }),
+    newProp('singer', 'prop-vocals', 'Vocals', { z: 1.5 }),
+    { ...newProp('guitarist', 'prop-guitar', 'Guitar', { x: -2.1, z: 1.2 }), rotation: { x: 0, y: 15, z: 0 } },
+    { ...newProp('bassist', 'prop-bass', 'Bass', { x: 2.1, z: 1.2 }), rotation: { x: 0, y: -15, z: 0 } },
+    { ...newProp('keyboardist', 'prop-keys', 'Keys', { x: -2.9, z: -0.4 }), rotation: { x: 0, y: 35, z: 0 } },
+    newProp('monitor', 'prop-monitor-1', 'Monitor 1', { x: -2.1, z: 2.15 }),
+    newProp('monitor', 'prop-monitor-2', 'Monitor 2', { z: 2.2 }),
+    newProp('monitor', 'prop-monitor-3', 'Monitor 3', { x: 2.1, z: 2.15 })
+  ]
+
   const look = (i: number, name: string, note: number, patch: Partial<Look>, layers: Partial<Layer>[]): Look => ({
     ...newLook(name, i),
     id: `look-${i + 1}`,
@@ -205,6 +226,14 @@ export function demoShow(): Show {
     look(9, 'Fire', 45, { fadeIn: 300, fadeOut: 600 }, [{ effect: 'image', params: { image: 'flames', moveY: 0.35, moveX: 0.04 } }])
   ]
   show.images.flames = flames()
+  show.lookFolders = [
+    { id: 'folder-washes', name: 'Washes' },
+    { id: 'folder-hits', name: 'Hits and strobes' }
+  ]
+  for (const l of show.looks) {
+    if (['Warm wash', 'Blue tide', 'Rainbow sweep', 'Embers', 'Fire'].includes(l.name)) l.folder = 'folder-washes'
+    else if (['Kick hit', 'Odd / even', 'Strobe'].includes(l.name)) l.folder = 'folder-hits'
+  }
 
   const chaser = (i: number, name: string, note: number, patch: Partial<Chaser>, steps: [look: number, beats: number][]): Chaser => ({
     ...newChaser(name, i),
