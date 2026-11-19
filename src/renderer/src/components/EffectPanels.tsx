@@ -1,13 +1,14 @@
 import { Copy, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef } from 'react'
-import { compileCustom, CURVE_PRESETS, customKey, evalCurve, gradientAt, newCustomEffect } from '@shared/custom'
+import { compileCustom, CURVE_PRESETS, customKey, evalCurve, gradientAt, MIN_BEATS, newCustomEffect, oneShotSeconds } from '@shared/custom'
 import { defaultParams } from '@shared/effects'
 import { newId } from '@shared/show'
 import type { Curve, CurveDrive, CustomEffect, GradientStop, Mapping } from '@shared/types'
 import { editEffect, useStore } from '../store'
 import { folderIn, ItemList } from './ItemList'
+import { effectReplay, REPLAY_PAUSE, useReplay } from './replay'
 import { SaveBar } from './SaveBar'
-import { ColorInput, Field, NumberInput, Section, Segmented, Select, Slider, TextInput } from './ui'
+import { BeatLength, ColorInput, Field, NumberInput, Section, Segmented, Select, Slider, TextInput } from './ui'
 
 const usedBy = (effect: CustomEffect, looks: { layers: { effect: string }[] }[]): number =>
   looks.reduce((n, l) => n + l.layers.filter((y) => y.effect === customKey(effect.id)).length, 0)
@@ -44,7 +45,7 @@ export function EffectList() {
           const n = usedBy(e, looks)
           return n === 0 ? 'unused' : `${n} layer${n === 1 ? '' : 's'}`
         }}
-        empty="Build your own effects here: draw a curve and let it drive brightness or colour, over time or along the pixels. They then appear next to the built-in effects in every look."
+        empty="Build your own effects here: draw a curve and let it drive brightness or colour, over time or along the pixels. They then appear next to the built-in effects in every scene."
         action={
           <button className="button small primary" onClick={add}>
             <Plus size={14} /> New effect
@@ -174,6 +175,7 @@ function CurveField({ curve, onChange }: { curve: Curve; onChange: (curve: Curve
 /** A curve and what reads it: time or position, how fast, which way. */
 function DriveEditor({ drive, low, high, onChange }: { drive: CurveDrive; low: string; high: string; onChange: (patch: Partial<CurveDrive>, key?: string) => void }) {
   const time = drive.over === 'time'
+  const random = !time && drive.direction === 'random'
   return (
     <>
       <div className="curve-wrap">
@@ -217,15 +219,15 @@ function DriveEditor({ drive, low, high, onChange }: { drive: CurveDrive; low: s
         </Field>
         <p className="form-note">
           {time
-            ? 'All pixels follow the curve together, from left to right, again and again.'
-            : 'The curve lies along the pixels: its left end on the first pixel. How "along" is meant (each fixture, the whole stage …) is chosen per layer in the look.'}
+            ? 'All pixels follow the curve together, from left to right.'
+            : 'The curve lies along the pixels: its left end on the first pixel. How "along" is meant (each fixture, the whole stage …) is chosen per layer in the scene.'}
         </p>
         {!time && (
           <Field label="Fits along">
             <NumberInput value={drive.repeats} min={0.1} max={32} step={0.25} unit="×" onChange={(repeats) => onChange({ repeats }, 'repeats')} />
           </Field>
         )}
-        <Field label={time ? 'Tempo in' : 'Travels in'}>
+        <Field label={time ? 'Tempo in' : random ? 'Jumps in' : 'Travels in'}>
           <Segmented
             value={drive.sync}
             onChange={(sync) => onChange({ sync })}
@@ -236,25 +238,50 @@ function DriveEditor({ drive, low, high, onChange }: { drive: CurveDrive; low: s
           />
         </Field>
         {drive.sync === 'hz' ? (
-          <Field label={time ? 'Passes per second' : 'Lengths per second (0 = still)'}>
+          <Field label={time ? 'Passes per second' : random ? 'Jumps per second (0 = stays)' : 'Lengths per second (0 = still)'}>
             <NumberInput value={drive.hz} min={0} max={30} step={0.05} unit="Hz" onChange={(hz) => onChange({ hz }, 'hz')} />
           </Field>
         ) : (
-          <Field label={time ? 'One pass lasts' : 'One length takes'}>
-            <NumberInput value={drive.beats} min={0.125} max={64} step={0.25} unit="beats" onChange={(beats) => onChange({ beats }, 'beats')} />
+          <Field label={time ? 'One pass lasts' : random ? 'Jumps every' : 'One length takes'}>
+            <BeatLength value={drive.beats} min={MIN_BEATS} onChange={(beats) => onChange({ beats }, 'beats')} />
           </Field>
         )}
-        <Field label="Direction" wide>
-          <Segmented
-            value={drive.direction}
+        <Field label={time ? 'Direction' : 'Movement'} wide>
+          <Select
+            value={random || !(time && drive.direction === 'random') ? drive.direction : 'forward'}
             onChange={(direction) => onChange({ direction })}
             options={[
-              { value: 'forward', label: 'Forward' },
-              { value: 'backward', label: 'Backward' },
-              { value: 'bounce', label: 'Back and forth' }
+              { value: 'forward', label: time ? 'Forward' : 'Travels forward' },
+              { value: 'backward', label: time ? 'Backward' : 'Travels backward' },
+              { value: 'bounce', label: 'Back and forth' },
+              ...(time ? [] : [{ value: 'random' as const, label: 'Jumps to a random place' }])
             ]}
           />
         </Field>
+        {random && (
+          <p className="form-note">
+            On every jump the curve lands somewhere else, and on each fixture somewhere different. A curve that is dark at both ends (a section, a dot) always stays whole on the pixels. To
+            light only one fixture at a time, set “Plays on” of the layer in the scene to random fixtures.
+          </p>
+        )}
+        {!random && <Field label="Repeats" wide>
+          <Segmented
+            value={drive.once ? 'once' : 'loop'}
+            onChange={(v) => onChange({ once: v === 'once' })}
+            options={[
+              { value: 'loop', label: 'Again and again' },
+              { value: 'once', label: 'Once per note' }
+            ]}
+          />
+        </Field>}
+        {drive.once && !random && (
+          <p className="form-note">
+            {time
+              ? 'Starts when the scene starts (its MIDI note arrives), runs through once and stays at the end of the curve. End the curve at the bottom for a single flash.'
+              : 'Starts when the scene starts (its MIDI note arrives): the curve comes in at one end, passes through once and leaves at the other.'}{' '}
+            The preview plays it again and again.
+          </p>
+        )}
       </div>
     </>
   )
@@ -317,15 +344,22 @@ function PreviewStrip({ effect }: { effect: CustomEffect }) {
     const out = new Float32Array(PREVIEW_PIXELS * 3)
     const u = Float32Array.from({ length: PREVIEW_PIXELS }, (_, i) => i / (PREVIEW_PIXELS - 1))
     const image = ctx.createImageData(PREVIEW_PIXELS, 1)
-    const start = performance.now()
+    let start = performance.now()
     let beat = 0
     let last = start
     let frame = 0
     const draw = (now: number) => {
       const s = useStore.getState()
       // Beats run at the tempo the engine would use: the MIDI clock if there is one, else the show tempo.
-      beat += ((now - last) / 60000) * (s.status?.clock?.bpm ?? s.show.settings.bpm)
+      const bpm = s.status?.clock?.bpm ?? s.show.settings.bpm
+      beat += ((now - last) / 60000) * bpm
       last = now
+      // What runs once per note starts over after a short pause, so it can be judged.
+      const once = oneShotSeconds(effect, bpm)
+      if (once !== null && now - start > (once + REPLAY_PAUSE) * 1000) {
+        start = now
+        beat = 0
+      }
       def.render({ out, u, count: PREVIEW_PIXELS, t: (now - start) / 1000, beat, p: { speed: 1 } })
       for (let i = 0; i < PREVIEW_PIXELS; i++) {
         for (let k = 0; k < 3; k++) image.data[i * 4 + k] = Math.round(Math.min(1, Math.max(0, out[i * 3 + k])) * 255)
@@ -336,7 +370,7 @@ function PreviewStrip({ effect }: { effect: CustomEffect }) {
     }
     frame = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(frame)
-  }, [def])
+  }, [def, effect])
 
   return <canvas ref={canvas} className="effect-strip" width={PREVIEW_PIXELS} height={1} aria-label="Preview of the effect on one strip" />
 }
@@ -359,6 +393,7 @@ export function EffectEditor() {
   const set = useStore((s) => s.set)
   const edit = useStore((s) => s.edit)
   const editNow = useStore((s) => s.editNow)
+  useReplay(useStore((s) => effectReplay(s, effect)))
 
   if (!effect) {
     return (
@@ -430,7 +465,7 @@ export function EffectEditor() {
             </>
           )}
         </div>
-        <p className="summary">{n === 0 ? 'Use it in the Looks tab: it is listed with the effects of every layer.' : `Used by ${n} layer${n === 1 ? '' : 's'}. Changes apply to all of them.`}</p>
+        <p className="summary">{n === 0 ? 'Use it in the Scenes tab: it is listed with the effects of every layer.' : `Used by ${n} layer${n === 1 ? '' : 's'}. Changes apply to all of them.`}</p>
       </Section>
 
       <Section title="Brightness">

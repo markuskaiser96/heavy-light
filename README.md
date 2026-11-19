@@ -25,11 +25,17 @@ unicast Art-Net is blocked by the system.
   Stage objects (musicians with their instruments, risers, monitors, truss) make the 3D view easier to read;
   they are scenery only. The selection moves with handles or keys: arrows on the floor (following the camera),
   Alt+Up/Down for height, Q/E to turn, Shift for big steps, G/R for move/rotate handles, Delete, Cmd/Ctrl+D.
-- **Looks**: a look is one or more layers; each layer puts an effect on some fixtures.
-  A MIDI note plays a look ("Learn from MIDI" assigns it). The list can be searched (name or note, Cmd/Ctrl+F)
+- **Scenes**: a scene is one or more layers; each layer puts an effect on some fixtures.
+  A MIDI note plays a scene ("Learn from MIDI" assigns it). The list can be searched (name or note, Cmd/Ctrl+F)
   and sorted into folders by drag and drop.
   The lists of fixtures, effects and chasers have the same search field and folders.
-- **Saving edits**: what you change in an editor (a fixture or stage object, a look, an effect, a chaser) is a
+- **Tempo**: lengths that follow the beat are chosen as note values (1/4, 1/8T, 1 bar …, counted in 4/4) or typed in
+  beats. A chaser has a speed factor (×¼ to ×4). A curve of a custom effect can run once per MIDI note instead of looping.
+- **Random**: a curve over position can jump to a random place on every pass, and a layer can play on randomly drawn
+  fixtures instead of all its targets. Both follow the beat, so preview and output always agree.
+- **MIDI tab**: all scenes and chasers in one table with their notes; play them, see what is active, learn or type
+  notes in place (applies right away).
+- **Saving edits**: what you change in an editor (a fixture or stage object, a scene, an effect, a chaser) is a
   draft. The 3D stage and the preview show it, but MIDI, the Live view and the show file keep the saved state
   until you press "Save" at the bottom of the editor (Cmd/Ctrl+Enter); "Discard" goes back. Entries with
   unsaved changes carry a dot in their list. Adding, duplicating, deleting, sorting and show settings apply right away.
@@ -37,9 +43,9 @@ unicast Art-Net is blocked by the system.
 - **Effects**: build your own effects. Draw a curve and let it drive brightness or colour (through a gradient),
   over time or along the pixels, in seconds or in beats of the MIDI clock. Own effects appear next to the built-in
   ones in every layer.
-- **Chasers**: run looks one after the other in tempo (beats and bpm), started by a MIDI note. A chaser can follow
+- **Chasers**: run scenes one after the other in tempo (beats and bpm), started by a MIDI note. A chaser can follow
   the MIDI clock of the DAW instead of a fixed tempo; switch on sending clock for the HeavyLight output there.
-- **Live**: pads for every look, master, blackout, MIDI monitor and timing measurements.
+- **Live**: pads for every scene, master, blackout, MIDI monitor and timing measurements.
 
 On macOS and Linux the app opens a virtual MIDI port named `HeavyLight`; pick it as MIDI output
 in the DAW. On Windows use a loopback port such as loopMIDI.

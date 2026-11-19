@@ -2,7 +2,7 @@ import dgram from 'node:dgram'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Engine } from '../src/engine/engine'
 import { createArtDmx, finishArtDmx } from '../src/engine/artnet'
-import { compileCustom, evalCurve, newCustomEffect, newDrive, normalizeEffect } from '../src/shared/custom'
+import { compileCustom, evalCurve, newCustomEffect, newDrive, normalizeEffect, oneShotSeconds } from '../src/shared/custom'
 import { LookRenderer } from '../src/engine/render'
 import { EFFECTS, prepareParams, defaultParams } from '../src/shared/effects'
 import { makeGenericPixelFixture, resolveMode, type OflFixture } from '../src/shared/ofl'
@@ -10,6 +10,7 @@ import { encodeImage } from '../src/shared/images'
 import { autoPlane, compilePatch, layoutSegments, mapImage, mapLayer, toWorld } from '../src/shared/patch'
 import { changedIds, discardItems, editBoth, editDraft, saveItems, unsaved } from '../src/shared/drafts'
 import { newProp, propBox, PROP_TYPES } from '../src/shared/props'
+import { makeDraw } from '../src/shared/random'
 import { demoShow, emptyShow, newChaser, newLayer, newLook, newStep, normalizeShow, LIBRARY } from '../src/shared/show'
 import type { FromEngine, Show } from '../src/shared/types'
 
@@ -218,6 +219,35 @@ describe('custom effects', () => {
     expect(out.slice(12)).toEqual([0, 0, 0.5])
   })
 
+  it('runs once per note and then stays at the end of the curve', () => {
+    const effect = newCustomEffect('e', 'Hit')
+    effect.brightness.drive = newDrive('decay', { sync: 'beats', beats: 0.5, once: true })
+    const def = compileCustom(effect)
+    const out = new Float32Array(3)
+    const level = (beat: number) => (def.render({ out, u: new Float32Array([0.5]), count: 1, t: 0, beat, p: { speed: 1 } }), out[0])
+    expect(level(0)).toBeCloseTo(1)
+    expect(level(0.25)).toBeCloseTo(0.5, 1)
+    // Looping, it would be back at full on every half beat.
+    expect(level(0.5)).toBeCloseTo(0)
+    expect(level(7.5)).toBeCloseTo(0)
+    expect(oneShotSeconds(effect, 120)).toBeCloseTo(0.25)
+    expect(oneShotSeconds(newCustomEffect('f', 'Loop'), 120)).toBeNull()
+  })
+
+  it('lets a curve over position pass through once without coming back', () => {
+    const effect = newCustomEffect('e', 'Sweep')
+    effect.brightness.drive = newDrive('bump', { over: 'position', hz: 1, once: true })
+    const def = compileCustom(effect)
+    const u = Float32Array.from({ length: 11 }, (_, i) => i / 10)
+    const out = new Float32Array(33)
+    const lit = (t: number) => (def.render({ out, u, count: 11, t, p: { speed: 1 } }), [...out].filter((_, i) => i % 3 === 0).findIndex((v) => v > 0.5))
+    expect(lit(0)).toBe(-1)
+    expect(lit(0.5)).toBe(5)
+    expect(lit(0.3)).toBeLessThan(lit(0.7))
+    expect(lit(1)).toBe(-1)
+    expect(lit(5)).toBe(-1)
+  })
+
   it('repairs what a file got wrong', () => {
     const e = normalizeEffect({ id: 'x', brightness: { mode: 'curve', value: 9, drive: { hz: -3, curve: { shape: 'wobbly', points: [{ x: 2, y: -1 }] } } } } as never)
     expect(e.name).toBe('Effect')
@@ -235,6 +265,66 @@ describe('custom effects', () => {
     expect(Math.max(...frame)).toBeGreaterThan(0.9)
     expect(frame.filter((v) => v === 0).length).toBeGreaterThan(frame.length / 3)
     expect(defaultParams('custom:comet')).toEqual({ speed: 1 })
+  })
+})
+
+describe('randomness', () => {
+  it('draws like from a shuffled deck: everything once per round, nothing twice in a row', () => {
+    for (const n of [2, 3, 5, 8]) {
+      const draw = makeDraw(n, 1234 + n)
+      const drawn = Array.from({ length: n * 40 }, (_, q) => draw(q))
+      for (let round = 0; round < 40; round++) expect(new Set(drawn.slice(round * n, round * n + n)).size).toBe(n)
+      expect(drawn.some((v, i) => i > 0 && v === drawn[i - 1])).toBe(false)
+      // The same question always gets the same answer.
+      expect(draw(17)).toBe(drawn[17])
+    }
+    expect(makeDraw(1, 5)(9)).toBe(0)
+  })
+
+  it('lets a section jump to a new place on every pass and keeps it whole', () => {
+    const effect = newCustomEffect('e', 'Section')
+    effect.brightness.drive = newDrive('bump', { over: 'position', sync: 'beats', beats: 1, direction: 'random' })
+    const def = compileCustom(effect)
+    const count = 200
+    const u = Float32Array.from({ length: count }, (_, i) => i / (count - 1))
+    const out = new Float32Array(count * 3)
+    const lit = (beat: number) => {
+      def.render({ out, u, count, t: 0, beat, p: { speed: 1 } })
+      const on = Array.from({ length: count }, (_, i) => out[i * 3] > 0.02)
+      return { first: on.indexOf(true), last: on.lastIndexOf(true), width: on.filter(Boolean).length }
+    }
+    const places = new Set<number>()
+    for (let beat = 0; beat < 12; beat++) {
+      const now = lit(beat + 0.1)
+      // One piece, as wide as the bump is, never cut off at an end.
+      expect(now.last - now.first + 1).toBe(now.width)
+      expect(now.width).toBeGreaterThan(50)
+      expect(lit(beat + 0.9).first).toBe(now.first)
+      places.add(now.first)
+    }
+    expect(places.size).toBeGreaterThan(6)
+  })
+
+  it('plays a layer on random fixtures, a different one every beat', () => {
+    const show = demoShow()
+    const layer = { ...newLayer('solid'), id: 'pick', params: { color: '#ffffff' }, pick: { count: 1, beats: 1 } }
+    show.looks = [{ ...newLook('Random', 0), id: 'random', layers: [layer] }]
+    const patch = compilePatch(show)
+    const renderer = new LookRenderer(show, patch)
+    const frame = new Float32Array(patch.cellCount * 3)
+    const litFixtures = (beat: number) => {
+      renderer.render(frame, [{ lookId: 'random', level: 1, t: beat / 2, beat }])
+      return patch.fixtures.filter((pf) => frame[pf.cellStart * 3] > 0).map((pf) => pf.fixture.id)
+    }
+    const seen: string[] = []
+    for (let beat = 0; beat < patch.fixtures.length; beat++) {
+      const now = litFixtures(beat + 0.5)
+      expect(now.length).toBe(1)
+      expect(litFixtures(beat + 0.01)).toEqual(now)
+      seen.push(now[0])
+    }
+    // One round: every fixture had its turn.
+    expect(new Set(seen).size).toBe(patch.fixtures.length)
   })
 })
 
@@ -537,6 +627,14 @@ describe('engine', () => {
     engine.handleMidi({ port: 'test', kind: 'noteoff', channel: 1, note: 72, velocity: 0, time: performance.now() })
     await wait(40)
     expect(pixel(packets.at(-1)!)).toEqual([0, 0, 0])
+  })
+
+  it('runs a chaser faster by its speed factor', async () => {
+    // 600 bpm × 2: the first step (1 beat) is over after 50 ms instead of 100.
+    const { engine, packets, wait } = await rig(twoLooks({ speed: 2 }))
+    engine.handle({ type: 'toggle', id: 'chase' })
+    await wait(75)
+    expect([...packets.at(-1)!.subarray(18 + 10, 18 + 13)]).toEqual([0, 0, 255])
   })
 
   it('crossfades between steps and stops after one pass when not looping', async () => {

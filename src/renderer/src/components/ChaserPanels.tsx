@@ -1,18 +1,28 @@
-import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
-import { useRef } from 'react'
+import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, ListPlus, Plus, Trash2 } from 'lucide-react'
+import { useRef, useState } from 'react'
 import { LOOK_COLORS, newChaser, newId, newStep } from '@shared/show'
 import type { Chaser, ChaserOrder, ChaserStep } from '@shared/types'
 import { editChaser, useStore } from '../store'
+import { AddStepsDialog } from './AddStepsDialog'
 import { ItemList, folderIn } from './ItemList'
 import { midiLabel, TriggerEditor } from './LookPanels'
 import { SaveBar } from './SaveBar'
-import { Field, NumberInput, Section, Segmented, Select, Slider, TextInput, Toggle } from './ui'
+import { BeatLength, Field, NumberInput, Section, Segmented, Select, Slider, TextInput, Toggle } from './ui'
 
 const ORDERS: { value: ChaserOrder; label: string }[] = [
   { value: 'forward', label: 'First to last' },
   { value: 'backward', label: 'Last to first' },
   { value: 'pingpong', label: 'Back and forth' },
   { value: 'random', label: 'Random' }
+]
+
+/** Factors on the tempo: the steps keep their lengths, the chaser runs through them faster or slower. */
+const SPEEDS: { value: string; label: string }[] = [
+  { value: '0.25', label: '×¼' },
+  { value: '0.5', label: '×½' },
+  { value: '1', label: '×1' },
+  { value: '2', label: '×2' },
+  { value: '4', label: '×4' }
 ]
 
 export function ChaserList() {
@@ -45,7 +55,7 @@ export function ChaserList() {
         matches={(c, query) => midiLabel(c).toLowerCase().includes(query)}
         lead={(c) => <span className="look-chip" style={{ background: c.color, opacity: 0.35 + 0.65 * Math.min(1, (running?.find((r) => r.chaserId === c.id)?.level ?? 0) * 2) }} />}
         meta={midiLabel}
-        empty="A chaser runs through several looks in tempo, for as long as its MIDI note is held."
+        empty="A chaser runs through several scenes in tempo, for as long as its MIDI note is held."
         action={
           <button className="button small primary" onClick={add}>
             <Plus size={14} /> New chaser
@@ -76,9 +86,11 @@ function TapTempo({ onTempo }: { onTempo: (bpm: number) => void }) {
 
 function Steps({ chaser, current, bpm }: { chaser: Chaser; current: number | null; bpm: number }) {
   const looks = useStore((s) => s.show.looks)
+  const [picking, setPicking] = useState(false)
   const setSteps = (steps: ChaserStep[]) => editChaser(chaser.id, { steps })
   const beats = chaser.steps.reduce((sum, step) => sum + step.beats, 0)
-  const seconds = (beats * 60) / Math.max(1, bpm)
+  const speed = chaser.speed > 0 ? chaser.speed : 1
+  const seconds = (beats * 60) / Math.max(1, bpm) / speed
   const options = [{ value: '', label: 'Dark' }, ...looks.map((l) => ({ value: l.id, label: l.name }))]
 
   const add = () => {
@@ -92,13 +104,25 @@ function Steps({ chaser, current, bpm }: { chaser: Chaser; current: number | nul
     <Section
       title="Steps"
       action={
-        <button className="button small ghost" onClick={add}>
-          <Plus size={14} /> Add step
-        </button>
+        <span className="actions">
+          <button className="button small ghost" title="Add one step" onClick={add}>
+            <Plus size={14} /> Step
+          </button>
+          <button className="button small ghost" title="Search the scenes and add many of them as steps at once" disabled={looks.length === 0} onClick={() => setPicking(true)}>
+            <ListPlus size={14} /> Scenes…
+          </button>
+        </span>
       }
     >
+      {picking && (
+        <AddStepsDialog
+          beats={chaser.steps.at(-1)?.beats ?? 1}
+          onClose={() => setPicking(false)}
+          onAdd={(ids, length) => setSteps([...chaser.steps, ...ids.map((id) => newStep(id, length))])}
+        />
+      )}
       {chaser.steps.length === 0 && (
-        <p className="empty">{looks.length ? 'Add steps and choose the look each one shows.' : 'A chaser plays looks. Build some in the Looks tab first.'}</p>
+        <p className="empty">{looks.length ? 'Add steps and choose the scene each one shows, or pick many scenes at once with “Scenes…”.' : 'A chaser plays scenes. Build some in the Scenes tab first.'}</p>
       )}
       <ol className="steps">
         {chaser.steps.map((step, index) => {
@@ -116,7 +140,7 @@ function Steps({ chaser, current, bpm }: { chaser: Chaser; current: number | nul
               <span className="look-chip" style={{ background: look?.color ?? 'var(--raised-2)' }} />
               <Select value={look ? step.lookId : ''} onChange={(lookId) => set({ lookId })} options={options} />
               <span className="step-beats" title="Length of this step in beats">
-                <NumberInput value={step.beats} min={0.25} max={64} step={0.25} unit="beats" onChange={(beats) => set({ beats }, 'beats')} />
+                <BeatLength value={step.beats} min={1 / 8} onChange={(beats) => set({ beats }, 'beats')} />
               </span>
               <button className="icon subtle" title="Move up" disabled={index === 0} onClick={() => swap(index - 1)}>
                 <ArrowUp size={13} />
@@ -133,7 +157,8 @@ function Steps({ chaser, current, bpm }: { chaser: Chaser; current: number | nul
       </ol>
       {chaser.steps.length > 0 && (
         <p className="summary">
-          One pass is {+beats.toFixed(2)} beat{beats === 1 ? '' : 's'}, or {seconds.toFixed(2)} s at {+bpm.toFixed(1)} bpm.
+          One pass is {+(beats / speed).toFixed(2)} beat{beats / speed === 1 ? '' : 's'}, or {seconds.toFixed(2)} s at {+bpm.toFixed(1)} bpm.
+          {speed !== 1 && ` The step lengths are played ${SPEEDS.find((x) => x.value === String(speed))?.label ?? `×${speed}`}.`}
         </p>
       )}
     </Section>
@@ -238,6 +263,9 @@ export function ChaserEditor() {
             : 'Use the tempo of the song in Reaper. The chaser starts on its first step the moment its note arrives, so it stays on the beat.'}
         </p>
         <div className="form-grid">
+          <Field label="Speed" wide>
+            <Segmented value={String(chaser.speed > 0 ? chaser.speed : 1)} onChange={(v) => change({ speed: Number(v) })} options={SPEEDS} />
+          </Field>
           <Field label="Order" wide>
             <Select value={chaser.order} onChange={(order) => change({ order })} options={ORDERS} />
           </Field>

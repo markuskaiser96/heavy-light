@@ -151,14 +151,21 @@ export function resolveTargets(show: Show, patch: Patch, targets: string[]): Pat
 }
 
 /** Global cell indices and effect coordinates (0..1) for one layer. */
-export function mapLayer(show: Show, patch: Patch, layer: Layer): { cells: Uint32Array; u: Float32Array } {
+export function mapLayer(show: Show, patch: Patch, layer: Layer): { cells: Uint32Array; u: Float32Array; owner: Uint16Array; owners: number } {
   const targets = resolveTargets(show, patch, layer.targets)
   const total = targets.reduce((n, pf) => n + pf.cellCount, 0)
   const cells = new Uint32Array(total)
   const u = new Float32Array(total)
 
+  // Which of the targeted fixtures each cell belongs to.
+  const owner = new Uint16Array(total)
   let k = 0
-  for (const pf of targets) for (let i = 0; i < pf.cellCount; i++) cells[k++] = pf.cellStart + i
+  targets.forEach((pf, fi) => {
+    for (let i = 0; i < pf.cellCount; i++) {
+      owner[k] = fi
+      cells[k++] = pf.cellStart + i
+    }
+  })
 
   const along = (pf: PatchedFixture, i: number): number => {
     const { gridW, gridH, cells: c } = pf.mode
@@ -200,7 +207,7 @@ export function mapLayer(show: Show, patch: Patch, layer: Layer): { cells: Uint3
       for (let i = 0; i < total; i++) u[i] = range > 1e-6 ? (patch.positions[cells[i] * 3 + axis] - min) / range : 0.5
     }
   }
-  return { cells, u }
+  return { cells, u, owner, owners: targets.length }
 }
 
 type Fixtures = Pick<Show, 'groups'>

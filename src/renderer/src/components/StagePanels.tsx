@@ -71,7 +71,7 @@ export function FixtureList() {
           </button>
         }
       >
-        {groups.length === 0 && <p className="empty">Select several fixtures and group them to address them together in looks.</p>}
+        {groups.length === 0 && <p className="empty">Select several fixtures and group them to address them together in scenes.</p>}
         <ul className="list">
           {groups.map((g) => (
             <li key={g.id} className="row group-row">

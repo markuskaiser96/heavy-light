@@ -193,3 +193,53 @@ const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 
 export const noteName = (note: number): string => `${NOTE_NAMES[note % 12]}${Math.floor(note / 12) - 1}`
 
 export const isIPv4 = (v: string): boolean => /^(\d{1,3})(\.\d{1,3}){3}$/.test(v) && v.split('.').every((n) => Number(n) <= 255)
+
+/** Note values as lengths in beats (quarter notes), in 4/4. T = triplet, a dot = one and a half times as long. */
+const NOTE_VALUES: { beats: number; label: string }[] = [
+  { beats: 16, label: '4 bars' },
+  { beats: 8, label: '2 bars' },
+  { beats: 4, label: '1 bar' },
+  { beats: 3, label: '1/2.' },
+  { beats: 2, label: '1/2' },
+  { beats: 1.5, label: '1/4.' },
+  { beats: 4 / 3, label: '1/2T' },
+  { beats: 1, label: '1/4' },
+  { beats: 0.75, label: '1/8.' },
+  { beats: 2 / 3, label: '1/4T' },
+  { beats: 0.5, label: '1/8' },
+  { beats: 1 / 3, label: '1/8T' },
+  { beats: 0.25, label: '1/16' },
+  { beats: 1 / 6, label: '1/16T' },
+  { beats: 0.125, label: '1/32' }
+]
+
+/**
+ * A length in beats, chosen as a note value (1/4, 1/8T, 1 bar …) or typed in beats. Wherever
+ * something runs in the tempo of the song.
+ */
+export function BeatLength({ value, onChange, min = 1 / 16, max = 64 }: { value: number; onChange: (beats: number) => void; min?: number; max?: number }) {
+  const known = NOTE_VALUES.find((n) => Math.abs(n.beats - value) < 1e-3)
+  const [custom, setCustom] = useState(!known)
+  const typing = custom || !known
+  return (
+    <span className="beat-length">
+      <select
+        className="input"
+        aria-label="Note value"
+        value={typing ? 'custom' : String(known.beats)}
+        onChange={(e) => {
+          setCustom(e.target.value === 'custom')
+          if (e.target.value !== 'custom') onChange(Number(e.target.value))
+        }}
+      >
+        {NOTE_VALUES.filter((n) => n.beats >= min - 1e-6 && n.beats <= max).map((n) => (
+          <option key={n.label} value={String(n.beats)}>
+            {n.label}
+          </option>
+        ))}
+        <option value="custom">Beats…</option>
+      </select>
+      {typing && <NumberInput value={+value.toFixed(4)} min={min} max={max} step={0.25} unit="beats" onChange={onChange} />}
+    </span>
+  )
+}

@@ -31,7 +31,7 @@ function storedPanels(): Record<PanelName, number> {
   return panels
 }
 
-export type View = 'stage' | 'looks' | 'effects' | 'chasers' | 'live'
+export type View = 'stage' | 'looks' | 'effects' | 'chasers' | 'midi' | 'live'
 
 /** Latest pixel colours from the engine. Kept outside React state: it changes 60 times a second. */
 export const frame: { pixels: Uint8Array } = { pixels: new Uint8Array(0) }
@@ -68,6 +68,8 @@ export interface State {
   /** Send the look or chaser being edited to the stage. */
   preview: boolean
   learning: boolean
+  /** MIDI tab: the look or chaser that takes the next note. In the editors, the one being edited learns. */
+  learnId: string | null
   status: EngineStatus | null
   midiLog: MidiEvent[]
   notice: { kind: 'error' | 'info'; text: string } | null
@@ -143,6 +145,7 @@ export const useStore = create<State>((set, get) => ({
   effectMapping: 'fixture',
   preview: true,
   learning: false,
+  learnId: null,
   status: null,
   midiLog: [],
   notice: null,
@@ -167,7 +170,7 @@ export const useStore = create<State>((set, get) => ({
     if (!next) return
     set({ ...next, past: [...s.past, { show: s.show, saved: s.saved }], future: s.future.slice(1), dirty: s.dirty || next.saved !== s.saved, lastEditKey: '' })
   },
-  setView: (view) => set({ view, learning: false }),
+  setView: (view) => set({ view, learning: false, learnId: null }),
   setPanel: (panel, width) => {
     const panels = { ...get().panels, [panel]: Math.round(Math.min(PANEL_MAX, Math.max(PANEL_MIN, width))) }
     set({ panels })

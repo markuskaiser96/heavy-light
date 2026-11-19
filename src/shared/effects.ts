@@ -21,6 +21,8 @@ export interface RenderArgs {
   t: number
   /** Beats since the look started, counted by the MIDI clock or the show tempo. Absent in previews without a tempo. */
   beat?: number
+  /** Which of the layer's fixtures each pixel belongs to (0, 1, 2 …), for effects that treat fixtures differently. */
+  owner?: Uint16Array
   /** Parameters with colours already parsed to [r, g, b]. */
   p: Record<string, number | boolean | string | RGB>
   /** Image effect only: the bitmap, and each pixel's position on the image plane in metres from its centre. */

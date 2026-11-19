@@ -4,6 +4,7 @@ import { ChaserEditor, ChaserList } from './components/ChaserPanels'
 import { EffectEditor, EffectList } from './components/EffectPanels'
 import { LookPads, SignalPanel } from './components/LivePanels'
 import { LookEditor, LookList } from './components/LookPanels'
+import { MidiTable } from './components/MidiPanels'
 import { Resizer } from './components/Resizer'
 import { Stage3D } from './components/Stage3D'
 import { FixtureInspector, FixtureList } from './components/StagePanels'
@@ -48,7 +49,12 @@ function connectEngine(): void {
         const midi = { channel: event.channel, note: event.note }
         if (s.view === 'chasers' && s.chaserId) editChaser(s.chaserId, { midi })
         else if (s.view === 'looks' && s.lookId) editLook(s.lookId, { midi })
-        useStore.setState({ learning: false })
+        else if (s.view === 'midi' && s.learnId) {
+          // The MIDI table assigns right away, in the show itself.
+          const id = s.learnId
+          s.editNow((show) => ({ ...show, looks: show.looks.map((l) => (l.id === id ? { ...l, midi } : l)), chasers: show.chasers.map((c) => (c.id === id ? { ...c, midi } : c)) }))
+        }
+        useStore.setState({ learning: false, learnId: null })
       }
       useStore.setState({ midiLog: [event, ...s.midiLog].slice(0, 30) })
     }
@@ -117,10 +123,10 @@ function useShortcuts(): void {
       } else if (!typing && !mod && e.key.toLowerCase() === 'b') {
         window.heavy.send({ type: 'blackout', on: !(s.status?.blackout ?? false) })
       } else if (!typing && e.key === 'Escape') {
-        if (s.learning) s.set({ learning: false })
-        else if (s.view === 'live') window.heavy.send({ type: 'releaseAll' })
-      } else if (!typing && !mod && ['1', '2', '3', '4', '5'].includes(e.key)) {
-        s.setView((['stage', 'looks', 'effects', 'chasers', 'live'] as const)[Number(e.key) - 1])
+        if (s.learning) s.set({ learning: false, learnId: null })
+        else if (s.view === 'live' || s.view === 'midi') window.heavy.send({ type: 'releaseAll' })
+      } else if (!typing && !mod && ['1', '2', '3', '4', '5', '6'].includes(e.key)) {
+        s.setView((['stage', 'looks', 'effects', 'chasers', 'midi', 'live'] as const)[Number(e.key) - 1])
       }
     }
     window.addEventListener('keydown', onKey)
@@ -150,17 +156,18 @@ export function App() {
         {view === 'looks' && <LookList />}
         {view === 'effects' && <EffectList />}
         {view === 'chasers' && <ChaserList />}
-        {view !== 'live' && <Resizer panel="left" />}
+        {view !== 'live' && view !== 'midi' && <Resizer panel="left" />}
         <div className="center">
           <Stage3D />
           {view === 'live' && <LookPads />}
+          {view === 'midi' && <MidiTable />}
         </div>
         <Resizer panel={view === 'looks' || view === 'chasers' || view === 'effects' ? 'rightWide' : 'right'} />
         {view === 'stage' && <FixtureInspector />}
         {view === 'looks' && <LookEditor />}
         {view === 'effects' && <EffectEditor />}
         {view === 'chasers' && <ChaserEditor />}
-        {view === 'live' && <SignalPanel />}
+        {(view === 'live' || view === 'midi') && <SignalPanel />}
       </main>
       {notice && (
         <div className={`notice ${notice.kind}`} role="alert">

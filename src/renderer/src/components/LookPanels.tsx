@@ -3,14 +3,15 @@ import { Fragment, useMemo, useRef } from 'react'
 import { customId, customKey, resolveEffect } from '@shared/custom'
 import { defaultParams, EFFECT_BY_ID, EFFECTS } from '@shared/effects'
 import { LOOK_COLORS, newId, newLayer, newLook } from '@shared/show'
-import type { Blend, Layer, Look, Mapping, Triggerable } from '@shared/types'
-import { autoPlane } from '@shared/patch'
+import type { Blend, Layer, Look, Mapping, Show, Triggerable } from '@shared/types'
+import { autoPlane, resolveTargets } from '@shared/patch'
 import { imageUrl, loadImageFile } from '../images'
 import { editLayer, editLook, useStore } from '../store'
 import { folderIn, ItemList } from './ItemList'
+import { lookReplay, useReplay } from './replay'
 import { SaveBar } from './SaveBar'
 import { usePatch } from './Stage3D'
-import { ColorInput, Field, noteName, NumberInput, Section, Segmented, Select, Slider, TextInput, Toggle } from './ui'
+import { BeatLength, ColorInput, Field, noteName, NumberInput, Section, Segmented, Select, Slider, TextInput, Toggle } from './ui'
 
 const MAPPINGS: { value: Mapping; label: string }[] = [
   { value: 'fixture', label: 'Along each fixture' },
@@ -44,7 +45,7 @@ export function LookList() {
     // A new look lands next to the one being worked on.
     const current = looks.find((l) => l.id === lookId)
     const folder = current ? folderIn(folders, current) : ''
-    const look: Look = { ...newLook(`Look ${looks.length + 1}`, looks.length), ...(folder ? { folder } : {}) }
+    const look: Look = { ...newLook(`Scene ${looks.length + 1}`, looks.length), ...(folder ? { folder } : {}) }
     editNow((s) => ({ ...s, looks: [...s.looks, look] }))
     set({ closedFolders: closed.filter((id) => id !== folder) })
     selectLook(look.id)
@@ -55,18 +56,18 @@ export function LookList() {
       <ItemList
         kind="looks"
         folderList="lookFolders"
-        title="Looks"
-        noun="look"
+        title="Scenes"
+        noun="scene"
         items={looks}
         selected={lookId ? [lookId] : []}
         onSelect={(id) => selectLook(id)}
         matches={(l, query) => midiLabel(l).toLowerCase().includes(query)}
         lead={(l) => <span className="look-chip" style={{ background: l.color, opacity: 0.35 + 0.65 * Math.min(1, (active?.find((a) => a.lookId === l.id)?.level ?? 0) * 2) }} />}
         meta={midiLabel}
-        empty="A look is what your lights do on one MIDI note: colours and effects on some or all fixtures."
+        empty="A scene is what your lights do on one MIDI note: colours and effects on some or all fixtures."
         action={
           <button className="button small primary" onClick={add}>
-            <Plus size={14} /> New look
+            <Plus size={14} /> New scene
           </button>
         }
       />
@@ -171,6 +172,9 @@ function LayerEditor({ look, layer }: { look: Look; layer: Layer }) {
   const set = useStore((s) => s.set)
   const def = useMemo(() => resolveEffect(custom, layer.effect), [custom, layer.effect])
   const ownId = customId(layer.effect)
+  const patch = usePatch()
+  const groups = useStore((s) => s.show.groups)
+  const fixtureCount = useMemo(() => resolveTargets({ groups } as Show, patch, layer.targets).length, [groups, patch, layer.targets])
   const setParam = (key: string, value: number | string | boolean) =>
     editLayer(look.id, layer.id, { params: { ...layer.params, [key]: value } }, `param-${layer.id}-${key}`)
 
@@ -234,6 +238,37 @@ function LayerEditor({ look, layer }: { look: Look; layer: Layer }) {
       <Section title="Where">
         <TargetPicker layer={layer} lookId={look.id} />
         <div className="form-grid">
+          {fixtureCount > 1 && (
+            <Field label="Plays on" wide>
+              <Segmented
+                value={layer.pick ? 'random' : 'all'}
+                onChange={(v) => editLayer(look.id, layer.id, { pick: v === 'random' ? { count: 1, beats: 1 } : undefined })}
+                options={[
+                  { value: 'all', label: `All ${fixtureCount} fixtures` },
+                  { value: 'random', label: 'Random ones' }
+                ]}
+              />
+            </Field>
+          )}
+          {fixtureCount > 1 && layer.pick && (
+            <>
+              <Field label="How many at once">
+                <NumberInput
+                  value={Math.min(layer.pick.count, fixtureCount - 1)}
+                  min={1}
+                  max={fixtureCount - 1}
+                  onChange={(count) => editLayer(look.id, layer.id, { pick: { ...layer.pick!, count: Math.round(count) } }, `pick-count-${layer.id}`)}
+                />
+              </Field>
+              <Field label="Draws again every">
+                <BeatLength value={layer.pick.beats} min={1 / 8} onChange={(beats) => editLayer(look.id, layer.id, { pick: { ...layer.pick!, beats } }, `pick-beats-${layer.id}`)} />
+              </Field>
+              <p className="form-note">
+                Like a shuffled deck: every fixture gets its turn before one comes up again, never the same one twice in a row. Counted in beats from the moment the scene starts. The other
+                fixtures keep what the layers below show.
+              </p>
+            </>
+          )}
           {layer.effect !== 'image' && (
             <Field label="Direction" wide>
               <Select value={layer.mapping} onChange={(mapping) => editLayer(look.id, layer.id, { mapping })} options={MAPPINGS} />
@@ -288,15 +323,22 @@ export function TriggerEditor({ item, onEdit }: { item: Triggerable; onEdit: (pa
           </>
         )}
       </div>
-      {item.midi && !learning && (
+      {!learning && (
         <div className="form-grid">
+          {/* Also without a note yet: typing a number sets it, no MIDI needed. */}
           <Field label="Note number">
-            <NumberInput value={item.midi.note} min={0} max={127} onChange={(note) => change({ midi: { ...item.midi!, note: Math.round(note) } }, 'note')} />
+            <NumberInput
+              value={item.midi?.note ?? NaN}
+              min={0}
+              max={127}
+              placeholder="0 to 127"
+              onChange={(note) => change({ midi: { channel: item.midi?.channel ?? 0, note: Math.round(note) } }, 'note')}
+            />
           </Field>
           <Field label="Channel">
             <Select
-              value={String(item.midi.channel)}
-              onChange={(c) => change({ midi: { ...item.midi!, channel: Number(c) } })}
+              value={String(item.midi?.channel ?? 0)}
+              onChange={(c) => item.midi && change({ midi: { ...item.midi, channel: Number(c) } })}
               options={[{ value: '0', label: 'Any' }, ...Array.from({ length: 16 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) }))]}
             />
           </Field>
@@ -341,11 +383,12 @@ export function LookEditor() {
   const custom = useStore((s) => s.show.effects)
   const effectName = (effect: string) => EFFECT_BY_ID.get(effect)?.name ?? custom.find((e) => e.id === customId(effect))?.name ?? 'Missing effect'
   const inFolder = (l: Look) => folderIn(folders, l)
+  useReplay(useStore((s) => lookReplay(s, look)))
 
   if (!look) {
     return (
       <aside className="panel right wide">
-        <p className="hint">Select a look on the left, or create a new one.</p>
+        <p className="hint">Select a scene on the left, or create a new one.</p>
       </aside>
     )
   }
@@ -373,13 +416,13 @@ export function LookEditor() {
   return (
     <aside className="panel right wide">
       <Section
-        title="Look"
+        title="Scene"
         action={
           <span className="actions">
             <button className={`icon${preview ? ' active' : ''}`} title={preview ? 'Shown on stage while you edit. Click to hide.' : 'Show on stage while editing'} onClick={() => set({ preview: !preview })}>
               {preview ? <Eye size={15} /> : <EyeOff size={15} />}
             </button>
-            <button className="icon" title="Move up in the list (drawn below later looks)" onClick={() => move(-1)}>
+            <button className="icon" title="Move up in the list (drawn below later scenes)" onClick={() => move(-1)}>
               <ArrowUp size={15} />
             </button>
             <button className="icon" title="Move down in the list (drawn on top)" onClick={() => move(1)}>
@@ -387,7 +430,7 @@ export function LookEditor() {
             </button>
             <button
               className="icon"
-              title="Duplicate look"
+              title="Duplicate scene"
               onClick={() => {
                 const copy: Look = { ...look, id: newId(), name: `${look.name} copy`, midi: null, layers: look.layers.map((y) => ({ ...y, id: newId() })) }
                 editNow((s) => ({ ...s, looks: [...s.looks, copy] }))
@@ -398,7 +441,7 @@ export function LookEditor() {
             </button>
             <button
               className="icon"
-              title="Delete look"
+              title="Delete scene"
               onClick={() => {
                 editNow((s) => ({
                   ...s,
@@ -452,7 +495,7 @@ export function LookEditor() {
           </button>
         }
       >
-        {look.layers.length === 0 && <p className="empty">This look is empty. Add a layer to put an effect on your fixtures.</p>}
+        {look.layers.length === 0 && <p className="empty">This scene is empty. Add a layer to put an effect on your fixtures.</p>}
         <ul className="list layers">
           {/* Shown top-most first, like layers in a drawing app. */}
           {[...look.layers].reverse().map((y) => {
@@ -483,7 +526,7 @@ export function LookEditor() {
 
       {layer && <LayerEditor look={look} layer={layer} />}
 
-      <SaveBar items={[{ kind: 'looks', ids: [look.id] }]} noun="look" />
+      <SaveBar items={[{ kind: 'looks', ids: [look.id] }]} noun="scene" />
     </aside>
   )
 }

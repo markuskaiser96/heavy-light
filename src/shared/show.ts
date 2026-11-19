@@ -79,6 +79,7 @@ export function newChaser(name: string, index: number): Chaser {
     steps: [],
     tempo: 'own',
     bpm: 120,
+    speed: 1,
     crossfade: 0,
     order: 'forward',
     loop: true,
@@ -119,7 +120,7 @@ export function normalizeShow(value: unknown): Show {
     props: (raw.props ?? [])
       .filter((p) => isPropKind(p.kind))
       .map((p) => ({ ...p, position: { ...ORIGIN, ...p.position }, rotation: { ...ORIGIN, ...p.rotation }, size: { ...propType(p.kind).size, ...p.size } })),
-    looks: (raw.looks ?? []).map((l, i) => ({ ...newLook(l.name ?? 'Look', i), ...l, layers: (l.layers ?? []).map((layer) => ({ ...newLayer(layer.effect), ...layer })) })),
+    looks: (raw.looks ?? []).map((l, i) => ({ ...newLook(l.name ?? 'Scene', i), ...l, layers: (l.layers ?? []).map((layer) => ({ ...newLayer(layer.effect), ...layer })) })),
     effects: (raw.effects ?? []).filter((e) => typeof e?.id === 'string').map(normalizeEffect),
     lookFolders: folders(raw.lookFolders),
     fixtureFolders: folders(raw.fixtureFolders),

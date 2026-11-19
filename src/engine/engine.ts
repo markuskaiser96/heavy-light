@@ -196,6 +196,11 @@ export class Engine {
         this.workShow = message.show
         this.setWork()
         break
+      case 'restartPreview':
+        this.previewStart = performance.now()
+        this.previewCount = counter(this.previewStart)
+        this.previewRun = null
+        break
       case 'preview':
         if (message.id !== this.previewId) {
           this.previewId = message.id
@@ -259,7 +264,7 @@ export class Engine {
     // A step that ends on this tick changes now, not at the next frame.
     const position = this.clockBeats(time)
     const due = (chaser: Chaser | undefined, r: Running | null): boolean =>
-      !!chaser && !!r && chaser.tempo === 'midi' && r.clockAt !== null && r.beat + position - r.clockAt >= stepBeats(chaser, r.index) - 1e-6
+      !!chaser && !!r && chaser.tempo === 'midi' && r.clockAt !== null && r.beat + (position - r.clockAt) * (chaser.speed > 0 ? chaser.speed : 1) >= stepBeats(chaser, r.index) - 1e-6
     if ([...this.runs].some(([id, r]) => due(this.chasers.get(id), r)) || due((this.work?.chasers ?? this.chasers).get(this.previewId ?? ''), this.previewRun)) this.tick(performance.now())
   }
 
@@ -292,7 +297,7 @@ export class Engine {
 
   /** Moves a chaser on to where it should be at `now`, at its own tempo or along the MIDI clock. */
   private run(chaser: Chaser, r: Running, now: number, loop: boolean): void {
-    advance(chaser, r, this.count(r, chaser.bpm, chaser.tempo === 'midi', now), now, loop)
+    advance(chaser, r, this.count(r, chaser.bpm, chaser.tempo === 'midi', now) * (chaser.speed > 0 ? chaser.speed : 1), now, loop)
   }
 
   /** Shows the custom effect being edited in the Effects tab on all fixtures. */

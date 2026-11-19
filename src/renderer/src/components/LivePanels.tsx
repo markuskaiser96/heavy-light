@@ -32,7 +32,7 @@ export function LookPads() {
                 )
               })}
             </div>
-            <h3 className="pads-title">Looks</h3>
+            <h3 className="pads-title">Scenes</h3>
           </>
         )}
         <div className="pads">
@@ -47,10 +47,10 @@ export function LookPads() {
               </button>
             )
           })}
-          {looks.length === 0 && <p className="empty">No looks yet. Build some in the Looks tab, then play them here.</p>}
+          {looks.length === 0 && <p className="empty">No scenes yet. Build some in the Scenes tab, then play them here.</p>}
         </div>
       </div>
-      <button className="button ghost release" disabled={!anyActive} title="Stop every look and chaser (Esc)" onClick={() => window.heavy.send({ type: 'releaseAll' })}>
+      <button className="button ghost release" disabled={!anyActive} title="Stop every scene and chaser (Esc)" onClick={() => window.heavy.send({ type: 'releaseAll' })}>
         Release all
       </button>
     </div>

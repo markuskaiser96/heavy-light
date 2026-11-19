@@ -90,6 +90,11 @@ export interface Layer {
   plane?: Plane
   /** Fixture or group ids. Empty = all fixtures. */
   targets: string[]
+  /**
+   * Plays on only `count` of the targeted fixtures at a time, drawn at random, and draws again every
+   * `beats` beats. Absent = on all of them.
+   */
+  pick?: { count: number; beats: number }
   mapping: Mapping
   blend: Blend
   opacity: number
@@ -114,7 +119,13 @@ export interface CurveDrive {
   sync: 'hz' | 'beats'
   hz: number
   beats: number
-  direction: 'forward' | 'backward' | 'bounce'
+  /** random (position only): instead of travelling, the curve jumps to another place on every pass, a different one on each fixture. */
+  direction: 'forward' | 'backward' | 'bounce' | 'random'
+  /**
+   * Runs through once, counted from the moment the look starts (its MIDI note), then stays at its end.
+   * Over position, the curve then passes through once: it comes in at one end and leaves at the other.
+   */
+  once: boolean
 }
 
 export interface GradientStop {
@@ -189,6 +200,8 @@ export interface Chaser extends Triggerable {
   /** own: runs at `bpm`. midi: follows the MIDI clock of the DAW, and falls back to `bpm` while no clock arrives. */
   tempo: 'own' | 'midi'
   bpm: number
+  /** Runs this many times as fast as the step lengths say: 2 = double time, 0.5 = half time. */
+  speed: number
   /** Share of each step (0..1) spent fading over from the previous step. 0 = hard cut. */
   crossfade: number
   order: ChaserOrder
@@ -241,6 +254,8 @@ export type ToEngine =
   | { type: 'work'; show: Show | null }
   /** `id` is a look, a chaser or `effect:<id>` for a custom effect, which is then shown on all fixtures with `mapping`. */
   | { type: 'preview'; id: string | null; mapping?: Mapping }
+  /** Starts what is being previewed from its beginning again, as a new MIDI note would. */
+  | { type: 'restartPreview' }
 
 export interface MidiEvent {
   port: string

@@ -1,4 +1,5 @@
 import { EFFECT_BY_ID, parseColor, type EffectDef, type ParamDef, type RGB } from './effects'
+import { hash01, seedOf } from './random'
 import type { Curve, CurveDrive, CustomEffect, GradientStop, ParamValue } from './types'
 
 /**
@@ -85,7 +86,7 @@ export function gradientAt(stops: GradientStop[], at: number, out: Float32Array 
 
 export function newDrive(preset = 'sine', patch: Partial<CurveDrive> = {}): CurveDrive {
   const curve = CURVE_PRESETS.find((p) => p.id === preset)?.curve ?? CURVE_PRESETS[0].curve
-  return { curve: { shape: curve.shape, points: curve.points.map((p) => ({ ...p })) }, over: 'time', repeats: 1, sync: 'hz', hz: 1, beats: 1, direction: 'forward', ...patch }
+  return { curve: { shape: curve.shape, points: curve.points.map((p) => ({ ...p })) }, over: 'time', repeats: 1, sync: 'hz', hz: 1, beats: 1, direction: 'forward', once: false, ...patch }
 }
 
 export function newCustomEffect(id: string, name: string): CustomEffect {
@@ -109,6 +110,9 @@ const number = (v: unknown, fallback: number, min: number, max: number): number 
 const oneOf = <T extends string>(v: unknown, options: readonly T[], fallback: T): T => (options.includes(v as T) ? (v as T) : fallback)
 const isColor = (v: unknown): v is string => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v)
 
+/** Shortest pass in beats: a 1/64 note. */
+export const MIN_BEATS = 1 / 16
+
 function normalizeDrive(raw: Partial<CurveDrive> | undefined, base: CurveDrive): CurveDrive {
   const points = (raw?.curve?.points ?? [])
     .filter((p) => typeof p?.x === 'number' && typeof p?.y === 'number')
@@ -120,8 +124,9 @@ function normalizeDrive(raw: Partial<CurveDrive> | undefined, base: CurveDrive):
     repeats: number(raw?.repeats, base.repeats, 0.1, 32),
     sync: oneOf(raw?.sync, ['hz', 'beats'], base.sync),
     hz: number(raw?.hz, base.hz, 0, 30),
-    beats: number(raw?.beats, base.beats, 0.125, 64),
-    direction: oneOf(raw?.direction, ['forward', 'backward', 'bounce'], base.direction)
+    beats: number(raw?.beats, base.beats, MIN_BEATS, 64),
+    direction: oneOf(raw?.direction, ['forward', 'backward', 'bounce', 'random'], base.direction),
+    once: raw?.once === true
   }
 }
 
@@ -147,30 +152,98 @@ export function normalizeEffect(raw: Partial<CustomEffect>): CustomEffect {
   }
 }
 
+/**
+ * How long the one-shot parts of an effect take in seconds at this tempo, or null if nothing in it
+ * runs only once. Used to play a preview again and again.
+ */
+export function oneShotSeconds(effect: CustomEffect, bpm: number): number | null {
+  let longest: number | null = null
+  for (const channel of [effect.brightness, effect.colour]) {
+    const d = channel.drive
+    if (channel.mode !== 'curve' || !d.once || (d.direction === 'random' && d.over === 'position')) continue
+    const pass = d.sync === 'beats' ? (d.beats * 60) / Math.max(1, bpm) : d.hz > 0 ? 1 / d.hz : 0
+    longest = Math.max(longest ?? 0, pass * (d.direction === 'bounce' ? 2 : 1))
+  }
+  return longest
+}
+
 /** What a layer can still set on a custom effect. */
 const LAYER_PARAMS: ParamDef[] = [{ key: 'speed', label: 'Speed', type: 'number', default: 1, min: 0.1, max: 8, step: 0.05, unit: '×' }]
 
 /** Beats per second assumed when nobody counts beats (a preview outside the engine). */
 const FALLBACK_BEATS = 2
 
-/** Reads one drive for every pixel into `values` (0..1). */
-function runDrive(drive: CurveDrive, table: Float32Array, values: Float32Array, u: Float32Array, count: number, t: number, beat: number, speed: number): void {
+/** A sampled curve, and where along it anything other than zero is: what a random jump has to keep on the pixels. */
+interface Table {
+  values: Float32Array
+  from: number
+  to: number
+}
+
+function tableOf(curve: Curve): Table {
+  const values = sampleCurve(curve)
+  let first = 0
+  let last = SAMPLES
+  while (first < SAMPLES && values[first] < 0.004) first++
+  while (last > first && values[last] < 0.004) last--
+  // One sample of room on each side, so the slopes down to zero stay in.
+  return { values, from: Math.max(0, first - 1) / SAMPLES, to: Math.min(SAMPLES, last + 1) / SAMPLES }
+}
+
+interface Pixels {
+  u: Float32Array
+  count: number
+  owner?: Uint16Array
+}
+
+/** Reads one drive for every pixel into `out` (0..1). */
+function runDrive(drive: CurveDrive, { values: table, from, to }: Table, out: Float32Array, { u, count, owner }: Pixels, t: number, beat: number, speed: number, seed: number): void {
   const moving = drive.sync === 'beats' || drive.hz !== 0
-  let passes = (drive.sync === 'beats' ? beat / drive.beats : t * drive.hz) * speed
-  if (drive.direction === 'backward') passes = -passes
-  // Back and forth: a triangle 0 → 1 → 0, one way per pass.
-  const there = drive.direction === 'bounce' ? 1 - Math.abs(2 * frac(passes / 2) - 1) : 0
-  if (drive.over === 'time') {
-    const x = drive.direction === 'bounce' ? there : !moving ? 0 : frac(passes)
-    values.fill(read(table, x), 0, count)
+  const run = Math.max(0, (drive.sync === 'beats' ? beat / drive.beats : t * drive.hz) * speed)
+  const random = drive.direction === 'random' && drive.over === 'position'
+  const back = drive.direction === 'backward'
+  const bounce = drive.direction === 'bounce'
+  if (random) {
+    // A new place on every pass, and another one on each fixture. A curve that is dark at its ends
+    // (a section, a dot) stays whole on the pixels; one that is not wraps around.
+    const pass = Math.floor(run + 1e-6)
+    const whole = from <= 0 && to >= 1
+    let of = -1
+    let shift = 0
+    for (let i = 0; i < count; i++) {
+      const fixture = owner ? owner[i] : 0
+      if (fixture !== of) {
+        of = fixture
+        const r = hash01(pass, seed + fixture * 7919)
+        shift = whole ? r : r * (1 - to + from) - from
+      }
+      const x = drive.repeats <= 1 ? u[i] * drive.repeats : frac(u[i] * drive.repeats)
+      out[i] = read(table, whole ? frac(x - shift) : x - shift)
+    }
     return
   }
-  const shift = drive.direction === 'bounce' ? there : passes
+  // Once: one pass (there and back when bouncing), then it stays where it ended.
+  const done = drive.once ? Math.min(bounce ? 2 : 1, run) : run
+  const passes = back ? -done : done
+  // Back and forth: a triangle 0 → 1 → 0, one way per pass.
+  const there = bounce ? 1 - Math.abs(2 * frac(done / 2) - 1) : 0
+  if (drive.over === 'time') {
+    const x = bounce ? there : drive.once ? (back ? 1 - done : done) : !moving ? 0 : frac(passes)
+    out.fill(read(table, x), 0, count)
+    return
+  }
+  if (drive.once && !bounce) {
+    // The curve passes through without wrapping: it starts just outside one end and ends just outside the other.
+    const span = drive.repeats + 1
+    for (let i = 0; i < count; i++) out[i] = read(table, back ? u[i] * drive.repeats - drive.repeats + done * span : u[i] * drive.repeats + 1 - done * span)
+    return
+  }
+  const shift = bounce ? there : passes
   // A single curve that stands still reaches its end at the last pixel instead of wrapping to its start.
   const still = !moving && drive.repeats <= 1
   for (let i = 0; i < count; i++) {
     const x = u[i] * drive.repeats - shift
-    values[i] = read(table, still ? x : frac(x))
+    out[i] = read(table, still ? x : frac(x))
   }
 }
 
@@ -179,8 +252,9 @@ const GRADIENT = 256
 /** Turns a custom effect into the same kind of effect the built-in ones are. */
 export function compileCustom(effect: CustomEffect): EffectDef {
   const { brightness, colour } = effect
-  const levelTable = brightness.mode === 'curve' ? sampleCurve(brightness.drive.curve) : null
-  const colourTable = colour.mode === 'curve' ? sampleCurve(colour.drive.curve) : null
+  const levelTable = brightness.mode === 'curve' ? tableOf(brightness.drive.curve) : null
+  const colourTable = colour.mode === 'curve' ? tableOf(colour.drive.curve) : null
+  const seed = seedOf(effect.id)
   const fixed: RGB = parseColor(colour.color)
   const ramp = new Float32Array((GRADIENT + 1) * 3)
   if (colourTable) for (let i = 0; i <= GRADIENT; i++) gradientAt(colour.gradient, i / GRADIENT, ramp, i * 3)
@@ -192,15 +266,16 @@ export function compileCustom(effect: CustomEffect): EffectDef {
     name: effect.name,
     hint: 'Your own effect',
     params: LAYER_PARAMS,
-    render({ out, u, count, t, beat, p }) {
+    render({ out, u, count, t, beat, p, owner }) {
       if (level.length < count) {
         level = new Float32Array(count)
         hue = new Float32Array(count)
       }
       const speed = typeof p.speed === 'number' ? p.speed : 1
       const beats = beat ?? t * FALLBACK_BEATS
-      if (levelTable) runDrive(brightness.drive, levelTable, level, u, count, t, beats, speed)
-      if (colourTable) runDrive(colour.drive, colourTable, hue, u, count, t, beats, speed)
+      const pixels = { u, count, owner }
+      if (levelTable) runDrive(brightness.drive, levelTable, level, pixels, t, beats, speed, seed)
+      if (colourTable) runDrive(colour.drive, colourTable, hue, pixels, t, beats, speed, seed + 1)
       for (let i = 0; i < count; i++) {
         const l = levelTable ? level[i] : brightness.value
         const o = i * 3
