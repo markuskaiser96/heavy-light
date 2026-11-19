@@ -132,6 +132,7 @@ export function normalizeEffect(raw: Partial<CustomEffect>): CustomEffect {
   return {
     id: base.id,
     name: typeof raw.name === 'string' && raw.name ? raw.name : base.name,
+    ...(typeof raw.folder === 'string' ? { folder: raw.folder } : {}),
     brightness: {
       mode: oneOf(raw.brightness?.mode, ['fixed', 'curve'], base.brightness.mode),
       value: number(raw.brightness?.value, base.brightness.value, 0, 1),

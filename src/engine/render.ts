@@ -68,9 +68,9 @@ export class LookRenderer {
     this.layers.set(EFFECT_PREVIEW, layer ? [layer] : [])
   }
 
-  /** `active` must be sorted in show order. */
-  render(frame: Float32Array, active: ActiveLook[]): void {
-    frame.fill(0)
+  /** `active` must be sorted in show order. With `onTop` the looks are drawn over what the frame already holds. */
+  render(frame: Float32Array, active: ActiveLook[], onTop = false): void {
+    if (!onTop) frame.fill(0)
     for (const a of active) {
       const layers = this.layers.get(a.lookId)
       if (!layers) continue

@@ -98,7 +98,7 @@ export function AddFixtureDialog({ onClose }: { onClose: () => void }) {
       })
       if (shared) nextAddress += channels
     }
-    state.edit((s) => ({ ...s, definitions: { ...s.definitions, [key]: definition }, fixtures: [...s.fixtures, ...created] }))
+    state.editNow((s) => ({ ...s, definitions: { ...s.definitions, [key]: definition }, fixtures: [...s.fixtures, ...created] }))
     state.selectFixtures(created.map((f) => f.id))
     onClose()
   }

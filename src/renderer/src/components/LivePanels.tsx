@@ -3,8 +3,9 @@ import { useStore } from '../store'
 import { noteName, Section } from './ui'
 
 export function LookPads() {
-  const looks = useStore((s) => s.show.looks)
-  const chasers = useStore((s) => s.show.chasers)
+  // The pads play what is saved in the show, like MIDI does.
+  const looks = useStore((s) => s.saved.looks)
+  const chasers = useStore((s) => s.saved.chasers)
   const active = useStore((s) => s.status?.active)
   const running = useStore((s) => s.status?.chasers)
   const anyActive = (active?.length ?? 0) > 0 || (running?.length ?? 0) > 0
@@ -83,8 +84,8 @@ function Timing({ label, stats, explain }: { label: string; stats: TimingStats |
 export function SignalPanel() {
   const status = useStore((s) => s.status)
   const log = useStore((s) => s.midiLog)
-  const looks = useStore((s) => s.show.looks)
-  const chasers = useStore((s) => s.show.chasers)
+  const looks = useStore((s) => s.saved.looks)
+  const chasers = useStore((s) => s.saved.chasers)
 
   const lookFor = (note: number, channel: number) => [...looks, ...chasers].filter((l) => l.midi && l.midi.note === note && (l.midi.channel === 0 || l.midi.channel === channel)).map((l) => l.name)
 

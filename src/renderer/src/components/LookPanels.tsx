@@ -1,5 +1,5 @@
-import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderOpen, FolderPlus, ImagePlus, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, ImagePlus, Plus, Trash2 } from 'lucide-react'
+import { Fragment, useMemo, useRef } from 'react'
 import { customId, customKey, resolveEffect } from '@shared/custom'
 import { defaultParams, EFFECT_BY_ID, EFFECTS } from '@shared/effects'
 import { LOOK_COLORS, newId, newLayer, newLook } from '@shared/show'
@@ -7,6 +7,8 @@ import type { Blend, Layer, Look, Mapping, Triggerable } from '@shared/types'
 import { autoPlane } from '@shared/patch'
 import { imageUrl, loadImageFile } from '../images'
 import { editLayer, editLook, useStore } from '../store'
+import { folderIn, ItemList } from './ItemList'
+import { SaveBar } from './SaveBar'
 import { usePatch } from './Stage3D'
 import { ColorInput, Field, noteName, NumberInput, Section, Segmented, Select, Slider, TextInput, Toggle } from './ui'
 
@@ -28,12 +30,6 @@ const BLENDS: { value: Blend; label: string }[] = [
 
 export const midiLabel = (look: Triggerable): string => (look.midi ? `${noteName(look.midi.note)} (${look.midi.note})` : '')
 
-const DRAG_TYPE = 'application/x-heavylight-look'
-
-/** Does the look fit what was typed? Name, note name ("C2") and note number all count. */
-const lookMatches = (look: Look, query: string): boolean =>
-  look.name.toLowerCase().includes(query) || midiLabel(look).toLowerCase().includes(query)
-
 export function LookList() {
   const looks = useStore((s) => s.show.looks)
   const folders = useStore((s) => s.show.lookFolders)
@@ -41,199 +37,39 @@ export function LookList() {
   const closed = useStore((s) => s.closedFolders)
   const selectLook = useStore((s) => s.selectLook)
   const set = useStore((s) => s.set)
-  const edit = useStore((s) => s.edit)
+  const editNow = useStore((s) => s.editNow)
   const active = useStore((s) => s.status?.active)
-  const [search, setSearch] = useState('')
-  const [renaming, setRenaming] = useState<string | null>(null)
-  /** Folder a dragged look hovers over ('' = the looks outside folders). */
-  const [dropOn, setDropOn] = useState<string | null>(null)
-  const searchInput = useRef<HTMLInputElement>(null)
-  const query = search.trim().toLowerCase()
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
-        e.preventDefault()
-        searchInput.current?.focus()
-        searchInput.current?.select()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
-
-  const folderOf = (l: Look) => (folders.some((f) => f.id === l.folder) ? l.folder! : '')
   const add = () => {
     // A new look lands next to the one being worked on.
     const current = looks.find((l) => l.id === lookId)
-    const folder = current ? folderOf(current) : ''
+    const folder = current ? folderIn(folders, current) : ''
     const look: Look = { ...newLook(`Look ${looks.length + 1}`, looks.length), ...(folder ? { folder } : {}) }
-    edit((s) => ({ ...s, looks: [...s.looks, look] }))
+    editNow((s) => ({ ...s, looks: [...s.looks, look] }))
     set({ closedFolders: closed.filter((id) => id !== folder) })
     selectLook(look.id)
   }
-  const addFolder = () => {
-    const folder = { id: newId(), name: `Folder ${folders.length + 1}` }
-    edit((s) => ({ ...s, lookFolders: [...s.lookFolders, folder] }))
-    setRenaming(folder.id)
-  }
-  const removeFolder = (id: string) =>
-    edit((s) => ({
-      ...s,
-      lookFolders: s.lookFolders.filter((f) => f.id !== id),
-      looks: s.looks.map((l) => (l.folder === id ? (({ folder: _folder, ...rest }) => rest)(l) : l))
-    }))
-  const moveTo = (id: string, folder: string) => {
-    const look = looks.find((l) => l.id === id)
-    if (look && folderOf(look) !== folder) editLook(id, { folder: folder || undefined })
-  }
-
-  /** Makes a block take dropped looks into `folder`. */
-  const dropTarget = (folder: string) => ({
-    onDragOver: (e: React.DragEvent) => {
-      if (!e.dataTransfer.types.includes(DRAG_TYPE)) return
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'move'
-      if (dropOn !== folder) setDropOn(folder)
-    },
-    onDragLeave: (e: React.DragEvent) => {
-      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropOn((d) => (d === folder ? null : d))
-    },
-    onDrop: (e: React.DragEvent) => {
-      e.preventDefault()
-      setDropOn(null)
-      moveTo(e.dataTransfer.getData(DRAG_TYPE), folder)
-    }
-  })
-
-  const rows = (list: Look[]) => (
-    <ul className="list">
-      {list.map((l) => {
-        const level = active?.find((a) => a.lookId === l.id)?.level ?? 0
-        return (
-          <li key={l.id}>
-            <button
-              className={`row look-row${l.id === lookId ? ' on' : ''}`}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData(DRAG_TYPE, l.id)
-                e.dataTransfer.effectAllowed = 'move'
-              }}
-              onDragEnd={() => setDropOn(null)}
-              onClick={() => selectLook(l.id)}
-            >
-              <span className="look-chip" style={{ background: l.color, opacity: 0.35 + 0.65 * Math.min(1, level * 2) }} />
-              <span className="row-name">{l.name}</span>
-              <span className="row-meta">{midiLabel(l)}</span>
-            </button>
-          </li>
-        )
-      })}
-    </ul>
-  )
-
-  // While searching, a folder whose name fits shows all of its looks; otherwise only the looks that fit.
-  const shown = (folder: { id: string; name: string } | null) => {
-    const own = looks.filter((l) => folderOf(l) === (folder?.id ?? ''))
-    return !query || folder?.name.toLowerCase().includes(query) ? own : own.filter((l) => lookMatches(l, query))
-  }
-  const loose = shown(null)
-  const filed = folders.map((folder) => ({ folder, list: shown(folder) })).filter((x) => !query || x.list.length > 0 || x.folder.name.toLowerCase().includes(query))
-  const nothing = query !== '' && loose.length === 0 && filed.length === 0
 
   return (
     <aside className="panel left">
-      <Section
+      <ItemList
+        kind="looks"
+        folderList="lookFolders"
         title="Looks"
+        noun="look"
+        items={looks}
+        selected={lookId ? [lookId] : []}
+        onSelect={(id) => selectLook(id)}
+        matches={(l, query) => midiLabel(l).toLowerCase().includes(query)}
+        lead={(l) => <span className="look-chip" style={{ background: l.color, opacity: 0.35 + 0.65 * Math.min(1, (active?.find((a) => a.lookId === l.id)?.level ?? 0) * 2) }} />}
+        meta={midiLabel}
+        empty="A look is what your lights do on one MIDI note: colours and effects on some or all fixtures."
         action={
-          <span className="actions">
-            <button className="icon" title="New folder" onClick={addFolder}>
-              <FolderPlus size={15} />
-            </button>
-            <button className="button small primary" onClick={add}>
-              <Plus size={14} /> New look
-            </button>
-          </span>
+          <button className="button small primary" onClick={add}>
+            <Plus size={14} /> New look
+          </button>
         }
-      >
-        {looks.length === 0 && folders.length === 0 && <p className="empty">A look is what your lights do on one MIDI note: colours and effects on some or all fixtures.</p>}
-        {looks.length > 0 && (
-          <div className="search">
-            <Search size={14} />
-            <input
-              ref={searchInput}
-              className="input"
-              value={search}
-              placeholder="Search looks"
-              spellCheck={false}
-              aria-label="Search looks by name or note"
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== 'Escape') return
-                setSearch('')
-                e.currentTarget.blur()
-              }}
-            />
-            {search && (
-              <button className="icon subtle shown" title="Clear search" onClick={() => setSearch('')}>
-                <X size={13} />
-              </button>
-            )}
-          </div>
-        )}
-        {nothing && <p className="empty">No look or folder matches “{search.trim()}”.</p>}
-
-        <div className={`look-group${dropOn === '' ? ' drop' : ''}`} {...dropTarget('')}>
-          {rows(loose)}
-          {dropOn === '' && loose.length === 0 && <p className="drop-hint">Drop here to take it out of its folder</p>}
-        </div>
-
-        {filed.map(({ folder, list }) => {
-          const open = query !== '' || !closed.includes(folder.id)
-          const count = looks.filter((l) => l.folder === folder.id).length
-          return (
-            <div key={folder.id} className={`look-group folder${dropOn === folder.id ? ' drop' : ''}`} {...dropTarget(folder.id)}>
-              <div className="row folder-row">
-                <button
-                  className="folder-toggle"
-                  aria-expanded={open}
-                  title={open ? 'Collapse' : 'Expand'}
-                  onClick={() => set({ closedFolders: closed.includes(folder.id) ? closed.filter((id) => id !== folder.id) : [...closed, folder.id] })}
-                >
-                  {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                  {open ? <FolderOpen size={14} /> : <Folder size={14} />}
-                </button>
-                {renaming === folder.id ? (
-                  <input
-                    className="input inline"
-                    autoFocus
-                    defaultValue={folder.name}
-                    onFocus={(e) => e.currentTarget.select()}
-                    onBlur={(e) => {
-                      const name = e.target.value.trim()
-                      if (name && name !== folder.name) edit((s) => ({ ...s, lookFolders: s.lookFolders.map((f) => (f.id === folder.id ? { ...f, name } : f)) }))
-                      setRenaming(null)
-                    }}
-                    onKeyDown={(e) => (e.key === 'Enter' || e.key === 'Escape') && e.currentTarget.blur()}
-                  />
-                ) : (
-                  <span className="row-name" title="Double-click to rename" onDoubleClick={() => setRenaming(folder.id)}>
-                    {folder.name}
-                  </span>
-                )}
-                <span className="row-meta">{count}</span>
-                <button className="icon subtle" title="Rename folder" onClick={() => setRenaming(folder.id)}>
-                  <Pencil size={13} />
-                </button>
-                <button className="icon subtle" title="Delete folder (its looks are kept)" onClick={() => removeFolder(folder.id)}>
-                  <Trash2 size={13} />
-                </button>
-              </div>
-              {open && (list.length > 0 ? rows(list) : <p className="drop-hint">{count === 0 ? 'Drag looks here' : 'No look in here matches'}</p>)}
-            </div>
-          )
-        })}
-      </Section>
+      />
     </aside>
   )
 }
@@ -277,11 +113,9 @@ function ImageSource({ look, layer }: { look: Look; layer: Layer }) {
     try {
       const image = await loadImageFile(file)
       const key = newId()
-      edit((s) => ({
-        ...s,
-        images: { ...s.images, [key]: image },
-        looks: s.looks.map((l) => (l.id === look.id ? { ...l, layers: l.layers.map((y) => (y.id === layer.id ? { ...y, params: { ...y.params, image: key } } : y)) } : l))
-      }))
+      // The picture goes into the show right away (unused ones are left out of the file); the layer is part of the draft.
+      edit((s) => ({ ...s, images: { ...s.images, [key]: image } }))
+      editLayer(look.id, layer.id, { params: { ...layer.params, image: key } })
     } catch {
       set({ notice: { kind: 'error', text: `${file.name} could not be read as a picture. Use a PNG, JPEG, WebP or GIF file.` } })
     }
@@ -498,7 +332,7 @@ export function LookEditor() {
   const layerId = useStore((s) => s.layerId)
   const preview = useStore((s) => s.preview)
   const set = useStore((s) => s.set)
-  const edit = useStore((s) => s.edit)
+  const editNow = useStore((s) => s.editNow)
   const selectLook = useStore((s) => s.selectLook)
   const selectLayer = useStore((s) => s.selectLayer)
   const fixtures = useStore((s) => s.show.fixtures)
@@ -506,7 +340,7 @@ export function LookEditor() {
   const folders = useStore((s) => s.show.lookFolders)
   const custom = useStore((s) => s.show.effects)
   const effectName = (effect: string) => EFFECT_BY_ID.get(effect)?.name ?? custom.find((e) => e.id === customId(effect))?.name ?? 'Missing effect'
-  const inFolder = (l: Look) => (folders.some((f) => f.id === l.folder) ? l.folder! : '')
+  const inFolder = (l: Look) => folderIn(folders, l)
 
   if (!look) {
     return (
@@ -519,12 +353,12 @@ export function LookEditor() {
   const layer = look.layers.find((l) => l.id === layerId) ?? look.layers.at(-1)
   const setLayers = (layers: Layer[]) => editLook(look.id, { layers })
   const move = (dir: -1 | 1) =>
-    edit((s) => {
+    editNow((s) => {
       // Swap places with the neighbour in the same folder: that is the one next to it in the list.
       const i = s.looks.findIndex((l) => l.id === look.id)
       let j = i + dir
-      while (s.looks[j] && inFolder(s.looks[j]) !== inFolder(look)) j += dir
-      if (j < 0 || j >= s.looks.length) return s
+      while (s.looks[j] && inFolder(s.looks[j]) !== inFolder(s.looks[i])) j += dir
+      if (i < 0 || j < 0 || j >= s.looks.length) return s
       const looks = [...s.looks]
       ;[looks[i], looks[j]] = [looks[j], looks[i]]
       return { ...s, looks }
@@ -556,7 +390,7 @@ export function LookEditor() {
               title="Duplicate look"
               onClick={() => {
                 const copy: Look = { ...look, id: newId(), name: `${look.name} copy`, midi: null, layers: look.layers.map((y) => ({ ...y, id: newId() })) }
-                edit((s) => ({ ...s, looks: [...s.looks, copy] }))
+                editNow((s) => ({ ...s, looks: [...s.looks, copy] }))
                 selectLook(copy.id)
               }}
             >
@@ -566,7 +400,7 @@ export function LookEditor() {
               className="icon"
               title="Delete look"
               onClick={() => {
-                edit((s) => ({
+                editNow((s) => ({
                   ...s,
                   looks: s.looks.filter((l) => l.id !== look.id),
                   // Steps that showed this look stay in place as dark steps, so chasers keep their timing.
@@ -648,6 +482,8 @@ export function LookEditor() {
       </Section>
 
       {layer && <LayerEditor look={look} layer={layer} />}
+
+      <SaveBar items={[{ kind: 'looks', ids: [look.id] }]} noun="look" />
     </aside>
   )
 }

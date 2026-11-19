@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { changedIds, discardItems, editBoth, editDraft, saveItems, unsaved, type Drafts, type ItemKind } from '@shared/drafts'
 import { demoShow, emptyShow, normalizeShow } from '@shared/show'
 import type { Chaser, CustomEffect, EngineStatus, FixtureInstance, Layer, Look, Mapping, MidiEvent, Show, StageProp } from '@shared/types'
 import type { HeavyApi } from '../../preload'
@@ -35,8 +36,19 @@ export type View = 'stage' | 'looks' | 'effects' | 'chasers' | 'live'
 /** Latest pixel colours from the engine. Kept outside React state: it changes 60 times a second. */
 export const frame: { pixels: Uint8Array } = { pixels: new Uint8Array(0) }
 
-interface State {
+export { changedIds, unsaved, type ItemKind }
+
+/** One undo step: the show as the editors have it, and the show as it is saved. */
+type Snapshot = Drafts
+
+export interface State {
+  /**
+   * The show as the editors have it. Fixtures, stage objects, looks, effects and chasers in here can
+   * be ahead of `saved`: they are drafts until the user saves them. Everything else is always the same in both.
+   */
   show: Show
+  /** The show as it is saved: what MIDI plays and what goes into the file. The same object as `show` while nothing is unsaved. */
+  saved: Show
   path: string | null
   dirty: boolean
   view: View
@@ -59,13 +71,26 @@ interface State {
   status: EngineStatus | null
   midiLog: MidiEvent[]
   notice: { kind: 'error' | 'info'; text: string } | null
-  past: Show[]
-  future: Show[]
+  past: Snapshot[]
+  future: Snapshot[]
   lastEditKey: string
   lastEditAt: number
 
-  /** Applies an edit. Edits sharing a `key` in quick succession (e.g. dragging a slider) form one undo step. */
+  /**
+   * Applies an edit from an editor. Changes to fixtures, stage objects, looks, effects and chasers stay
+   * drafts; anything else it changes applies right away. Edits sharing a `key` in quick succession
+   * (e.g. dragging a slider) form one undo step.
+   */
   edit: (fn: (show: Show) => Show, key?: string) => void
+  /**
+   * Applies a change to the show itself, drafts or not: adding, deleting, duplicating, sorting.
+   * `fn` runs on the saved show and on the drafts, so it must find what it changes by id.
+   */
+  editNow: (fn: (show: Show) => Show, key?: string) => void
+  /** Puts the drafts with these ids into the show. */
+  saveItems: (kind: ItemKind, ids: string[]) => void
+  /** Drops the drafts with these ids and goes back to what is saved. */
+  discardItems: (kind: ItemKind, ids: string[]) => void
   undo: () => void
   redo: () => void
   setView: (view: View) => void
@@ -83,8 +108,27 @@ interface State {
 
 const initialView = (new URLSearchParams(location.search).get('view') as View | null) ?? 'stage'
 
+const same = (show: Show): Snapshot => ({ show, saved: show })
+
+/** Takes over an edit and remembers the state before it for undo. */
+function commit(to: Snapshot, key = ''): void {
+  const s = useStore.getState()
+  const next = { show: to.show, saved: to.saved }
+  if (next.show === s.show && next.saved === s.saved) return
+  const now = Date.now()
+  const merge = key !== '' && key === s.lastEditKey && now - s.lastEditAt < 800
+  useStore.setState({
+    ...next,
+    dirty: s.dirty || next.saved !== s.saved,
+    past: merge ? s.past : [...s.past.slice(-99), { show: s.show, saved: s.saved }],
+    future: [],
+    lastEditKey: key,
+    lastEditAt: now
+  })
+}
+
 export const useStore = create<State>((set, get) => ({
-  show: emptyShow(),
+  ...same(emptyShow()),
   path: null,
   dirty: false,
   view: initialView,
@@ -107,32 +151,21 @@ export const useStore = create<State>((set, get) => ({
   lastEditKey: '',
   lastEditAt: 0,
 
-  edit: (fn, key = '') => {
-    const s = get()
-    const next = fn(s.show)
-    if (next === s.show) return
-    const now = Date.now()
-    const merge = key !== '' && key === s.lastEditKey && now - s.lastEditAt < 800
-    set({
-      show: next,
-      dirty: true,
-      past: merge ? s.past : [...s.past.slice(-99), s.show],
-      future: [],
-      lastEditKey: key,
-      lastEditAt: now
-    })
-  },
+  edit: (fn, key) => commit(editDraft(get(), fn), key),
+  editNow: (fn, key) => commit(editBoth(get(), fn), key),
+  saveItems: (kind, ids) => commit(saveItems(get(), kind, ids)),
+  discardItems: (kind, ids) => commit(discardItems(get(), kind, ids)),
   undo: () => {
     const s = get()
     const previous = s.past.at(-1)
     if (!previous) return
-    set({ show: previous, past: s.past.slice(0, -1), future: [s.show, ...s.future], dirty: true, lastEditKey: '' })
+    set({ ...previous, past: s.past.slice(0, -1), future: [{ show: s.show, saved: s.saved }, ...s.future], dirty: s.dirty || previous.saved !== s.saved, lastEditKey: '' })
   },
   redo: () => {
     const s = get()
     const next = s.future[0]
     if (!next) return
-    set({ show: next, past: [...s.past, s.show], future: s.future.slice(1), dirty: true, lastEditKey: '' })
+    set({ ...next, past: [...s.past, { show: s.show, saved: s.saved }], future: s.future.slice(1), dirty: s.dirty || next.saved !== s.saved, lastEditKey: '' })
   },
   setView: (view) => set({ view, learning: false }),
   setPanel: (panel, width) => {
@@ -155,7 +188,7 @@ export const useStore = create<State>((set, get) => ({
   set: (partial) => set(partial),
   load: (show, path) =>
     set({
-      show,
+      ...same(show),
       path,
       dirty: false,
       past: [],
@@ -198,18 +231,37 @@ export const editLayer = (lookId: string, layerId: string, patch: Partial<Layer>
     key
   )
 
+// ---------- drafts ----------
+
+/** Where each kind of entry is edited. */
+export const VIEW_OF: Record<ItemKind, View> = { fixtures: 'stage', props: 'stage', looks: 'looks', effects: 'effects', chasers: 'chasers' }
+
+/** What the save bar of the current view would save: the entries being edited there. */
+export function editing(s: State): { kind: ItemKind; ids: string[] }[] {
+  if (s.view === 'looks') return [{ kind: 'looks', ids: s.lookId ? [s.lookId] : [] }]
+  if (s.view === 'effects') return [{ kind: 'effects', ids: s.effectId ? [s.effectId] : [] }]
+  if (s.view === 'chasers') return [{ kind: 'chasers', ids: s.chaserId ? [s.chaserId] : [] }]
+  if (s.view !== 'stage') return []
+  // Nothing selected on stage: everything that was moved or changed there.
+  const all = s.selectedFixtures.length + s.selectedProps.length === 0
+  return [
+    { kind: 'fixtures', ids: all ? s.show.fixtures.map((f) => f.id) : s.selectedFixtures },
+    { kind: 'props', ids: all ? s.show.props.map((p) => p.id) : s.selectedProps }
+  ]
+}
+
 // ---------- files ----------
 
 export async function saveShow(saveAs = false): Promise<boolean> {
   const s = useStore.getState()
   try {
     // Pictures that no layer uses any more (replaced ones are kept for undo) are left out of the file.
-    const used = new Set(s.show.looks.flatMap((l) => l.layers.map((y) => String(y.params.image ?? ''))))
-    const images = Object.fromEntries(Object.entries(s.show.images).filter(([id]) => used.has(id)))
-    const path = await window.heavy.saveShow({ path: saveAs ? null : s.path, text: JSON.stringify({ ...s.show, images }, null, 2), name: s.show.name })
+    const used = new Set(s.saved.looks.flatMap((l) => l.layers.map((y) => String(y.params.image ?? ''))))
+    const images = Object.fromEntries(Object.entries(s.saved.images).filter(([id]) => used.has(id)))
+    const path = await window.heavy.saveShow({ path: saveAs ? null : s.path, text: JSON.stringify({ ...s.saved, images }, null, 2), name: s.saved.name })
     if (!path) return false
     // Only clear the edited mark if nothing changed while the file was being written.
-    useStore.setState((now) => ({ path, dirty: now.show !== s.show }))
+    useStore.setState((now) => ({ path, dirty: now.saved !== s.saved }))
     return true
   } catch (err) {
     useStore.setState({ notice: { kind: 'error', text: `The show could not be saved: ${(err as Error).message}` } })

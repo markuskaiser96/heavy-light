@@ -22,6 +22,25 @@ export function usePatch(): Patch {
   return useMemo(() => compilePatch({ fixtures, definitions }), [fixtures, definitions])
 }
 
+/**
+ * The engine sends colours in the order of the saved fixtures, while the stage shows them where the
+ * editor has them. For every cell on screen: where its colour is in the frame, or -1 if the fixture
+ * has no light there yet (its type or mode changed and is not saved).
+ */
+function useFrameCells(patch: Patch): Int32Array {
+  const fixtures = useStore((s) => s.saved.fixtures)
+  const definitions = useStore((s) => s.saved.definitions)
+  return useMemo(() => {
+    const saved = compilePatch({ fixtures, definitions })
+    const cells = new Int32Array(patch.cellCount).fill(-1)
+    for (const pf of patch.fixtures) {
+      const from = saved.byId.get(pf.fixture.id)
+      if (from?.cellCount === pf.cellCount) for (let i = 0; i < pf.cellCount; i++) cells[pf.cellStart + i] = from.cellStart + i
+    }
+    return cells
+  }, [patch, fixtures, definitions])
+}
+
 /** Size of one light cell of a fixture in metres (along the strip, across, depth). */
 function cellSize(pf: PatchedFixture): [number, number, number] {
   const { gridW, gridH } = pf.mode
@@ -39,6 +58,7 @@ function bodySize(pf: PatchedFixture): [number, number, number] {
 }
 
 function Pixels({ patch }: { patch: Patch }) {
+  const cells = useFrameCells(patch)
   const mesh = useRef<THREE.InstancedMesh>(null)
   const count = Math.max(1, patch.cellCount)
 
@@ -70,10 +90,12 @@ function Pixels({ patch }: { patch: Patch }) {
     if (!m || !colors) return
     const px = frame.pixels
     const out = colors.array as Float32Array
-    const n = Math.min(px.length, patch.cellCount * 3)
     // Values above 1 feed the bloom pass; a dark pixel keeps a faint tint so the fixture stays visible.
-    for (let i = 0; i < n; i++) out[i] = 0.03 + LINEAR[px[i]] * 3
-    for (let i = n; i < patch.cellCount * 3; i++) out[i] = 0.03
+    for (let c = 0; c < patch.cellCount; c++) {
+      const from = cells[c] * 3
+      const lit = from >= 0 && from + 2 < px.length
+      for (let k = 0; k < 3; k++) out[c * 3 + k] = lit ? 0.03 + LINEAR[px[from + k]] * 3 : 0.03
+    }
     colors.needsUpdate = true
   })
 
@@ -87,6 +109,7 @@ function Pixels({ patch }: { patch: Patch }) {
 
 /** One soft light per fixture so beams spill onto the stage floor. */
 function Spill({ patch }: { patch: Patch }) {
+  const cells = useFrameCells(patch)
   const lights = useRef<(THREE.PointLight | null)[]>([])
   const fixtures = patch.fixtures.slice(0, MAX_LIGHTS)
 
@@ -98,8 +121,9 @@ function Spill({ patch }: { patch: Patch }) {
       let r = 0
       let g = 0
       let b = 0
-      const end = Math.min(px.length, (pf.cellStart + pf.cellCount) * 3)
-      for (let i = pf.cellStart * 3; i < end; i += 3) {
+      for (let c = pf.cellStart; c < pf.cellStart + pf.cellCount; c++) {
+        const i = cells[c] * 3
+        if (i < 0 || i + 2 >= px.length) continue
         r += LINEAR[px[i]]
         g += LINEAR[px[i + 1]]
         b += LINEAR[px[i + 2]]

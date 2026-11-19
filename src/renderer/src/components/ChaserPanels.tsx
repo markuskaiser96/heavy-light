@@ -3,7 +3,9 @@ import { useRef } from 'react'
 import { LOOK_COLORS, newChaser, newId, newStep } from '@shared/show'
 import type { Chaser, ChaserOrder, ChaserStep } from '@shared/types'
 import { editChaser, useStore } from '../store'
+import { ItemList, folderIn } from './ItemList'
 import { midiLabel, TriggerEditor } from './LookPanels'
+import { SaveBar } from './SaveBar'
 import { Field, NumberInput, Section, Segmented, Select, Slider, TextInput, Toggle } from './ui'
 
 const ORDERS: { value: ChaserOrder; label: string }[] = [
@@ -15,43 +17,41 @@ const ORDERS: { value: ChaserOrder; label: string }[] = [
 
 export function ChaserList() {
   const chasers = useStore((s) => s.show.chasers)
+  const folders = useStore((s) => s.show.chaserFolders)
   const chaserId = useStore((s) => s.chaserId)
   const selectChaser = useStore((s) => s.selectChaser)
-  const edit = useStore((s) => s.edit)
+  const editNow = useStore((s) => s.editNow)
   const running = useStore((s) => s.status?.chasers)
 
   const add = () => {
-    const chaser = newChaser(`Chaser ${chasers.length + 1}`, chasers.length)
-    edit((s) => ({ ...s, chasers: [...s.chasers, chaser] }))
+    // A new chaser lands next to the one being worked on.
+    const current = chasers.find((c) => c.id === chaserId)
+    const folder = current ? folderIn(folders, current) : ''
+    const chaser: Chaser = { ...newChaser(`Chaser ${chasers.length + 1}`, chasers.length), ...(folder ? { folder } : {}) }
+    editNow((s) => ({ ...s, chasers: [...s.chasers, chaser] }))
     selectChaser(chaser.id)
   }
 
   return (
     <aside className="panel left">
-      <Section
+      <ItemList
+        kind="chasers"
+        folderList="chaserFolders"
         title="Chasers"
+        noun="chaser"
+        items={chasers}
+        selected={chaserId ? [chaserId] : []}
+        onSelect={(id) => selectChaser(id)}
+        matches={(c, query) => midiLabel(c).toLowerCase().includes(query)}
+        lead={(c) => <span className="look-chip" style={{ background: c.color, opacity: 0.35 + 0.65 * Math.min(1, (running?.find((r) => r.chaserId === c.id)?.level ?? 0) * 2) }} />}
+        meta={midiLabel}
+        empty="A chaser runs through several looks in tempo, for as long as its MIDI note is held."
         action={
           <button className="button small primary" onClick={add}>
             <Plus size={14} /> New chaser
           </button>
         }
-      >
-        {chasers.length === 0 && <p className="empty">A chaser runs through several looks in tempo, for as long as its MIDI note is held.</p>}
-        <ul className="list">
-          {chasers.map((c) => {
-            const level = running?.find((r) => r.chaserId === c.id)?.level ?? 0
-            return (
-              <li key={c.id}>
-                <button className={`row${c.id === chaserId ? ' on' : ''}`} onClick={() => selectChaser(c.id)}>
-                  <span className="look-chip" style={{ background: c.color, opacity: 0.35 + 0.65 * Math.min(1, level * 2) }} />
-                  <span className="row-name">{c.name}</span>
-                  <span className="row-meta">{midiLabel(c)}</span>
-                </button>
-              </li>
-            )
-          })}
-        </ul>
-      </Section>
+      />
     </aside>
   )
 }
@@ -144,7 +144,7 @@ export function ChaserEditor() {
   const chaser = useStore((s) => s.show.chasers.find((c) => c.id === s.chaserId))
   const preview = useStore((s) => s.preview)
   const set = useStore((s) => s.set)
-  const edit = useStore((s) => s.edit)
+  const editNow = useStore((s) => s.editNow)
   const selectChaser = useStore((s) => s.selectChaser)
   const status = useStore((s) => s.status)
 
@@ -175,7 +175,7 @@ export function ChaserEditor() {
               title="Duplicate chaser"
               onClick={() => {
                 const copy: Chaser = { ...chaser, id: newId(), name: `${chaser.name} copy`, midi: null, steps: chaser.steps.map((step) => ({ ...step, id: newId() })) }
-                edit((s) => ({ ...s, chasers: [...s.chasers, copy] }))
+                editNow((s) => ({ ...s, chasers: [...s.chasers, copy] }))
                 selectChaser(copy.id)
               }}
             >
@@ -185,7 +185,7 @@ export function ChaserEditor() {
               className="icon"
               title="Delete chaser"
               onClick={() => {
-                edit((s) => ({ ...s, chasers: s.chasers.filter((c) => c.id !== chaser.id) }))
+                editNow((s) => ({ ...s, chasers: s.chasers.filter((c) => c.id !== chaser.id) }))
                 selectChaser(null)
               }}
             >
@@ -258,6 +258,8 @@ export function ChaserEditor() {
       <Steps chaser={chaser} current={current} bpm={following && clock ? clock.bpm : chaser.bpm} />
 
       <TriggerEditor item={chaser} onEdit={(patch, key) => editChaser(chaser.id, patch, key)} />
+
+      <SaveBar items={[{ kind: 'chasers', ids: [chaser.id] }]} noun="chaser" />
     </aside>
   )
 }

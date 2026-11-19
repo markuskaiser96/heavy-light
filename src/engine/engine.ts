@@ -58,6 +58,19 @@ interface Running extends Playing {
 }
 
 /** MIDI clock sends this many ticks per quarter note. */
+/** Per look: how strongly it is shown this frame, and its effect time. */
+type Levels = Map<string, { level: number; t: number; beat: number }>
+
+/** The looks to draw, in the order of the show. */
+function inOrder(renderer: LookRenderer, levels: Levels): ActiveLook[] {
+  const active: ActiveLook[] = []
+  for (const id of renderer.order) {
+    const l = levels.get(id)
+    if (l) active.push({ lookId: id, level: l.level, t: l.t, beat: l.beat })
+  }
+  return active
+}
+
 const TICKS_PER_BEAT = 24
 /** Without a tick for this long (ms) the clock counts as stopped. The slowest tempo, 20 bpm, ticks every 125 ms. */
 const CLOCK_TIMEOUT = 500
@@ -93,7 +106,14 @@ export class Engine {
   private playing = new Map<string, Playing>()
   private runs = new Map<string, Running>()
   /** Per look: how strongly it is shown this frame and its effect time. Filled by looks and chasers alike. */
-  private levels = new Map<string, { level: number; t: number; beat: number }>()
+  private levels: Levels = new Map()
+  /**
+   * The show as the editors have it, while it differs from the saved one: the preview plays its
+   * looks, effects and chasers on the saved fixtures. null = the preview plays the saved show.
+   */
+  private work: { show: Show; renderer: LookRenderer; looks: Map<string, Look>; chasers: Map<string, Chaser> } | null = null
+  private workShow: Show | null = null
+  private previewLevels: Levels = new Map()
   private previewId: string | null = null
   private previewMapping: Mapping = 'fixture'
   private previewCount = counter(0)
@@ -172,6 +192,10 @@ export class Engine {
       case 'output':
         this.output = message.on
         break
+      case 'work':
+        this.workShow = message.show
+        this.setWork()
+        break
       case 'preview':
         if (message.id !== this.previewId) {
           this.previewId = message.id
@@ -236,7 +260,7 @@ export class Engine {
     const position = this.clockBeats(time)
     const due = (chaser: Chaser | undefined, r: Running | null): boolean =>
       !!chaser && !!r && chaser.tempo === 'midi' && r.clockAt !== null && r.beat + position - r.clockAt >= stepBeats(chaser, r.index) - 1e-6
-    if ([...this.runs].some(([id, r]) => due(this.chasers.get(id), r)) || due(this.chasers.get(this.previewId ?? ''), this.previewRun)) this.tick(performance.now())
+    if ([...this.runs].some(([id, r]) => due(this.chasers.get(id), r)) || due((this.work?.chasers ?? this.chasers).get(this.previewId ?? ''), this.previewRun)) this.tick(performance.now())
   }
 
   /** True once enough ticks have arrived to know the tempo, and they keep coming. */
@@ -274,7 +298,19 @@ export class Engine {
   /** Shows the custom effect being edited in the Effects tab on all fixtures. */
   private previewEffect(): void {
     const id = this.previewId?.startsWith('effect:') ? this.previewId.slice(7) : null
-    this.renderer?.previewEffect(id, this.previewMapping)
+    this.renderer?.previewEffect(this.work ? null : id, this.previewMapping)
+    this.work?.renderer.previewEffect(id, this.previewMapping)
+  }
+
+  /** Prepares the show the editors work on for the preview. It plays on the saved fixtures: only those are patched. */
+  private setWork(): void {
+    const { show, patch, workShow } = this
+    if (!show || !patch || !workShow) this.work = null
+    else {
+      const edited: Show = { ...workShow, definitions: show.definitions, fixtures: show.fixtures, groups: show.groups }
+      this.work = { show: edited, renderer: new LookRenderer(edited, patch), looks: new Map(edited.looks.map((l) => [l.id, l])), chasers: new Map(edited.chasers.map((c) => [c.id, c])) }
+    }
+    this.previewEffect()
   }
 
   private isOn(id: string): boolean {
@@ -308,7 +344,7 @@ export class Engine {
     this.show = show
     this.patch = compilePatch(show)
     this.renderer = new LookRenderer(show, this.patch)
-    this.previewEffect()
+    this.setWork()
     this.looks = new Map(show.looks.map((l) => [l.id, l]))
     this.chasers = new Map(show.chasers.map((c) => [c.id, c]))
     this.warnings = this.patch.warnings
@@ -390,28 +426,28 @@ export class Engine {
       if (!fade(r, chaser, dt)) this.runs.delete(id)
       else this.showStep(chaser, r, now, r.fade * r.intensity)
     }
+    // What is being edited comes from the work show if there is one; it is then drawn over what MIDI plays.
+    const edited: { show: Show | null; looks: Map<string, Look>; chasers: Map<string, Chaser> } = this.work ?? { show: this.show, looks: this.looks, chasers: this.chasers }
+    const shown = this.work ? this.previewLevels : levels
+    this.previewLevels.clear()
     if (this.previewId) {
-      const chaser = this.chasers.get(this.previewId)
+      const chaser = edited.chasers.get(this.previewId)
       if (chaser) {
         // In the editor a chaser always loops, so every step can be judged.
         this.previewRun ??= startRun(chaser, now, 1, 1)
         this.run(chaser, this.previewRun, now, true)
-        this.showStep(chaser, this.previewRun, now, 1)
+        this.showStep(chaser, this.previewRun, now, 1, shown)
       } else {
         this.previewRun = null
-        this.previewCount.beat += this.count(this.previewCount, bpm, true, now)
+        this.previewCount.beat += this.count(this.previewCount, edited.show?.settings.bpm ?? bpm, true, now)
         const id = this.previewId.startsWith('effect:') ? EFFECT_PREVIEW : this.previewId
-        if (id === EFFECT_PREVIEW || this.looks.has(id)) this.showLook(id, 1, (now - this.previewStart) / 1000, this.previewCount.beat)
+        if (id === EFFECT_PREVIEW || edited.looks.has(id)) this.showLook(id, 1, (now - this.previewStart) / 1000, this.previewCount.beat, shown)
       }
     }
 
     if (this.renderer && this.patch) {
-      const active: ActiveLook[] = []
-      for (const id of this.renderer.order) {
-        const l = levels.get(id)
-        if (l) active.push({ lookId: id, level: l.level, t: l.t, beat: l.beat })
-      }
-      this.renderer.render(this.frame, active)
+      this.renderer.render(this.frame, inOrder(this.renderer, levels))
+      if (this.work) this.work.renderer.render(this.frame, inOrder(this.work.renderer, this.previewLevels), true)
       this.writeOutput()
       if (this.output) this.send(midiTime)
     }
@@ -434,11 +470,11 @@ export class Engine {
   }
 
   /** Adds a look to this frame. Several sources of the same look add up; the strongest one sets the effect time. */
-  private showLook(lookId: string, level: number, t: number, beat: number): void {
+  private showLook(lookId: string, level: number, t: number, beat: number, levels = this.levels): void {
     if (!lookId || level <= 0) return
-    const existing = this.levels.get(lookId)
+    const existing = levels.get(lookId)
     if (!existing) {
-      this.levels.set(lookId, { level: Math.min(1, level), t, beat })
+      levels.set(lookId, { level: Math.min(1, level), t, beat })
       return
     }
     if (level > existing.level) {
@@ -449,14 +485,14 @@ export class Engine {
   }
 
   /** Adds the current step of a chaser and, while it fades over, the step before. */
-  private showStep(chaser: Chaser, r: Running, now: number, level: number): void {
+  private showStep(chaser: Chaser, r: Running, now: number, level: number, levels = this.levels): void {
     const step = chaser.steps[r.index]
     if (!step) return
     const share = Math.min(1, chaser.crossfade)
     const x = share > 0 && r.previous >= 0 ? Math.min(1, r.beat / (stepBeats(chaser, r.index) * share)) : 1
-    this.showLook(step.lookId, level * x, (now - r.stepStartedAt) / 1000, r.beat)
+    this.showLook(step.lookId, level * x, (now - r.stepStartedAt) / 1000, r.beat, levels)
     const previous = chaser.steps[r.previous]
-    if (x < 1 && previous) this.showLook(previous.lookId, level * (1 - x), (now - r.previousStartedAt) / 1000, (now - r.previousStartedAt) / r.beatLength)
+    if (x < 1 && previous) this.showLook(previous.lookId, level * (1 - x), (now - r.previousStartedAt) / 1000, (now - r.previousStartedAt) / r.beatLength, levels)
   }
 
   private writeOutput(): void {
@@ -497,7 +533,7 @@ export class Engine {
 
   private status(): EngineStatus {
     return {
-      active: [...this.levels].filter(([lookId]) => lookId !== EFFECT_PREVIEW).map(([lookId, l]) => ({ lookId, level: l.level })),
+      active: [...this.levels, ...this.previewLevels].filter(([lookId]) => lookId !== EFFECT_PREVIEW).map(([lookId, l]) => ({ lookId, level: l.level })),
       chasers: [...this.runs].map(([chaserId, r]) => ({ chaserId, level: r.fade * r.intensity, step: r.index })),
       previewStep: this.previewRun?.index ?? null,
       master: this.master,

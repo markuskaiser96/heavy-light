@@ -3,7 +3,7 @@ import { defaultParams } from './effects'
 import { encodeImage, isImageAsset } from './images'
 import { genericPixelKey, isOflFixture, makeGenericPixelFixture, type OflFixture } from './ofl'
 import { isPropKind, newProp, propType } from './props'
-import type { Chaser, ChaserStep, FixtureInstance, ImageAsset, Layer, Look, Show } from './types'
+import type { Chaser, ChaserStep, FixtureInstance, Folder, ImageAsset, Layer, Look, Show } from './types'
 import drgbFader from './library/drgb-fader.json'
 import ledBar from './library/led-bar-240-8.json'
 import rgbFader from './library/rgb-fader.json'
@@ -37,6 +37,9 @@ export function emptyShow(): Show {
     props: [],
     looks: [],
     lookFolders: [],
+    fixtureFolders: [],
+    effectFolders: [],
+    chaserFolders: [],
     effects: [],
     chasers: [],
     images: {},
@@ -89,6 +92,8 @@ export function newChaser(name: string, index: number): Chaser {
 }
 
 /** Validates a parsed file and fills in anything a newer or older version may lack. Throws with a readable message. */
+const folders = (raw: Folder[] | undefined): Folder[] => (raw ?? []).filter((f) => typeof f?.id === 'string' && typeof f.name === 'string')
+
 export function normalizeShow(value: unknown): Show {
   if (typeof value !== 'object' || value === null || (value as Show).format !== 'heavylight-show') {
     throw new Error('This file is not a HeavyLight show.')
@@ -116,7 +121,10 @@ export function normalizeShow(value: unknown): Show {
       .map((p) => ({ ...p, position: { ...ORIGIN, ...p.position }, rotation: { ...ORIGIN, ...p.rotation }, size: { ...propType(p.kind).size, ...p.size } })),
     looks: (raw.looks ?? []).map((l, i) => ({ ...newLook(l.name ?? 'Look', i), ...l, layers: (l.layers ?? []).map((layer) => ({ ...newLayer(layer.effect), ...layer })) })),
     effects: (raw.effects ?? []).filter((e) => typeof e?.id === 'string').map(normalizeEffect),
-    lookFolders: (raw.lookFolders ?? []).filter((f) => typeof f?.id === 'string' && typeof f.name === 'string'),
+    lookFolders: folders(raw.lookFolders),
+    fixtureFolders: folders(raw.fixtureFolders),
+    effectFolders: folders(raw.effectFolders),
+    chaserFolders: folders(raw.chaserFolders),
     chasers: (raw.chasers ?? []).map((c, i) => ({ ...newChaser(c.name ?? 'Chaser', i), ...c, steps: (c.steps ?? []).map((step) => ({ ...newStep(''), ...step })) })),
     stage: { ...base.stage, ...raw.stage },
     settings: { ...base.settings, ...raw.settings }

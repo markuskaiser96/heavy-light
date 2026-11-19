@@ -5,6 +5,8 @@ import { defaultParams } from '@shared/effects'
 import { newId } from '@shared/show'
 import type { Curve, CurveDrive, CustomEffect, GradientStop, Mapping } from '@shared/types'
 import { editEffect, useStore } from '../store'
+import { folderIn, ItemList } from './ItemList'
+import { SaveBar } from './SaveBar'
 import { ColorInput, Field, NumberInput, Section, Segmented, Select, Slider, TextInput } from './ui'
 
 const usedBy = (effect: CustomEffect, looks: { layers: { effect: string }[] }[]): number =>
@@ -12,45 +14,43 @@ const usedBy = (effect: CustomEffect, looks: { layers: { effect: string }[] }[])
 
 export function EffectList() {
   const effects = useStore((s) => s.show.effects)
+  const folders = useStore((s) => s.show.effectFolders)
   const looks = useStore((s) => s.show.looks)
   const effectId = useStore((s) => s.effectId)
   const set = useStore((s) => s.set)
-  const edit = useStore((s) => s.edit)
+  const editNow = useStore((s) => s.editNow)
 
   const add = () => {
-    const effect = newCustomEffect(newId(), `Effect ${effects.length + 1}`)
-    edit((s) => ({ ...s, effects: [...s.effects, effect] }))
+    // A new effect lands next to the one being worked on.
+    const current = effects.find((e) => e.id === effectId)
+    const folder = current ? folderIn(folders, current) : ''
+    const effect: CustomEffect = { ...newCustomEffect(newId(), `Effect ${effects.length + 1}`), ...(folder ? { folder } : {}) }
+    editNow((s) => ({ ...s, effects: [...s.effects, effect] }))
     set({ effectId: effect.id })
   }
 
   return (
     <aside className="panel left">
-      <Section
+      <ItemList
+        kind="effects"
+        folderList="effectFolders"
         title="Effects"
+        noun="effect"
+        items={effects}
+        selected={effectId ? [effectId] : []}
+        onSelect={(id) => set({ effectId: id })}
+        lead={(e) => <CurveIcon curve={(e.brightness.mode === 'curve' ? e.brightness : e.colour).drive.curve} />}
+        meta={(e) => {
+          const n = usedBy(e, looks)
+          return n === 0 ? 'unused' : `${n} layer${n === 1 ? '' : 's'}`
+        }}
+        empty="Build your own effects here: draw a curve and let it drive brightness or colour, over time or along the pixels. They then appear next to the built-in effects in every look."
         action={
           <button className="button small primary" onClick={add}>
             <Plus size={14} /> New effect
           </button>
         }
-      >
-        {effects.length === 0 && (
-          <p className="empty">Build your own effects here: draw a curve and let it drive brightness or colour, over time or along the pixels. They then appear next to the built-in effects in every look.</p>
-        )}
-        <ul className="list">
-          {effects.map((e) => {
-            const n = usedBy(e, looks)
-            return (
-              <li key={e.id}>
-                <button className={`row${e.id === effectId ? ' on' : ''}`} onClick={() => set({ effectId: e.id })}>
-                  <CurveIcon curve={(e.brightness.mode === 'curve' ? e.brightness : e.colour).drive.curve} />
-                  <span className="row-name">{e.name}</span>
-                  <span className="row-meta">{n === 0 ? 'unused' : `${n} layer${n === 1 ? '' : 's'}`}</span>
-                </button>
-              </li>
-            )
-          })}
-        </ul>
-      </Section>
+      />
     </aside>
   )
 }
@@ -358,6 +358,7 @@ export function EffectEditor() {
   const mapping = useStore((s) => s.effectMapping)
   const set = useStore((s) => s.set)
   const edit = useStore((s) => s.edit)
+  const editNow = useStore((s) => s.editNow)
 
   if (!effect) {
     return (
@@ -375,7 +376,7 @@ export function EffectEditor() {
 
   const remove = () => {
     // Layers that used it fall back to a plain colour instead of going dark without a word.
-    edit((s) => ({
+    editNow((s) => ({
       ...s,
       effects: s.effects.filter((e) => e.id !== effect.id),
       looks: s.looks.map((l) => ({ ...l, layers: l.layers.map((y) => (y.effect === customKey(effect.id) ? { ...y, effect: 'solid', params: defaultParams('solid') } : y)) }))
@@ -384,7 +385,7 @@ export function EffectEditor() {
   }
   const duplicate = () => {
     const copy: CustomEffect = { ...structuredClone(effect), id: newId(), name: `${effect.name} copy` }
-    edit((s) => ({ ...s, effects: [...s.effects, copy] }))
+    editNow((s) => ({ ...s, effects: [...s.effects, copy] }))
     set({ effectId: copy.id })
   }
 
@@ -470,6 +471,8 @@ export function EffectEditor() {
           </>
         )}
       </Section>
+
+      <SaveBar items={[{ kind: 'effects', ids: [effect.id] }]} noun="effect" />
     </aside>
   )
 }

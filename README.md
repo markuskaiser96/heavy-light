@@ -28,6 +28,11 @@ unicast Art-Net is blocked by the system.
 - **Looks**: a look is one or more layers; each layer puts an effect on some fixtures.
   A MIDI note plays a look ("Learn from MIDI" assigns it). The list can be searched (name or note, Cmd/Ctrl+F)
   and sorted into folders by drag and drop.
+  The lists of fixtures, effects and chasers have the same search field and folders.
+- **Saving edits**: what you change in an editor (a fixture or stage object, a look, an effect, a chaser) is a
+  draft. The 3D stage and the preview show it, but MIDI, the Live view and the show file keep the saved state
+  until you press "Save" at the bottom of the editor (Cmd/Ctrl+Enter); "Discard" goes back. Entries with
+  unsaved changes carry a dot in their list. Adding, duplicating, deleting, sorting and show settings apply right away.
   The Image effect lays a picture over the fixtures and can move, spin and zoom it.
 - **Effects**: build your own effects. Draw a curve and let it drive brightness or colour (through a gradient),
   over time or along the pixels, in seconds or in beats of the MIDI clock. Own effects appear next to the built-in

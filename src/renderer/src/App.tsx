@@ -8,22 +8,32 @@ import { Resizer } from './components/Resizer'
 import { Stage3D } from './components/Stage3D'
 import { FixtureInspector, FixtureList } from './components/StagePanels'
 import { TopBar } from './components/TopBar'
-import { editChaser, editLook, frame, loadInitialShow, saveShow, useStore } from './store'
+import { editChaser, editing, editLook, frame, loadInitialShow, saveShow, unsaved, useStore, VIEW_OF, type ItemKind } from './store'
 
 /** Connects the store to the engine process. Runs once for the lifetime of the window. */
 function connectEngine(): void {
   const { heavy } = window
+  type S = ReturnType<typeof useStore.getState>
   let sendQueued = false
+  let sentSaved: unknown = null
+  let sentWork: unknown = undefined
+  /** Sends the engine the saved show, which MIDI plays, and the show with the unsaved edits, which the preview plays. */
   const sendShow = () => {
     if (sendQueued) return
     sendQueued = true
     // Coalesce bursts of edits (dragging a slider) into one message per animation frame.
     requestAnimationFrame(() => {
       sendQueued = false
-      heavy.send({ type: 'show', show: useStore.getState().show })
+      const s = useStore.getState()
+      const work = s.show === s.saved ? null : s.show
+      if (s.saved !== sentSaved) heavy.send({ type: 'show', show: s.saved })
+      if (work !== sentWork) heavy.send({ type: 'work', show: work })
+      sentSaved = s.saved
+      sentWork = work
     })
   }
-  type S = ReturnType<typeof useStore.getState>
+  /** Edits to the file, or drafts that are not saved into the show yet. */
+  const edited = (s: S) => s.dirty || s.show !== s.saved
   const previewId = (s: S) =>
     !s.preview ? null : s.view === 'looks' ? s.lookId : s.view === 'chasers' ? s.chaserId : s.view === 'effects' && s.effectId ? `effect:${s.effectId}` : null
   const sendPreview = (s: S) => heavy.send({ type: 'preview', id: previewId(s), mapping: s.effectMapping })
@@ -45,23 +55,43 @@ function connectEngine(): void {
   })
 
   heavy.onEngineRestarted(() => {
+    sentSaved = null
+    sentWork = undefined
     sendShow()
     sendPreview(useStore.getState())
   })
 
-  heavy.onSaveAndClose(() => void saveShow().then((saved) => saved && heavy.close()))
+  heavy.onSaveAndClose(() => {
+    const s = useStore.getState()
+    const open = unsaved(s)
+    if (open.length === 0) return void saveShow().then((saved) => saved && heavy.close())
+    // Closing must not decide for the user whether half-finished edits go into the show.
+    showUnsaved(open[0])
+    s.set({ notice: { kind: 'info', text: `${open.length === 1 ? 'One change is' : `${open.length} changes are`} not saved into the show yet. Save or discard ${open.length === 1 ? 'it' : 'them'}, then close again.` } })
+  })
 
   useStore.subscribe((s, prev) => {
-    if (s.show !== prev.show) sendShow()
+    if (s.show !== prev.show || s.saved !== prev.saved) sendShow()
     if (previewId(s) !== previewId(prev) || s.effectMapping !== prev.effectMapping) sendPreview(s)
-    if (s.dirty !== prev.dirty || s.show.name !== prev.show.name) heavy.setDirty(s.dirty, s.show.name)
+    if (edited(s) !== edited(prev) || s.saved.name !== prev.saved.name) heavy.setDirty(edited(s), s.saved.name)
   })
 
   void loadInitialShow().then(() => {
     const s = useStore.getState()
-    heavy.setDirty(s.dirty, s.show.name)
+    heavy.setDirty(edited(s), s.saved.name)
     sendPreview(s)
   })
+}
+
+/** Brings an entry with unsaved changes on screen. */
+function showUnsaved({ kind, id }: { kind: ItemKind; id: string }): void {
+  const s = useStore.getState()
+  s.setView(VIEW_OF[kind])
+  if (kind === 'looks') s.selectLook(id)
+  else if (kind === 'chasers') s.selectChaser(id)
+  else if (kind === 'effects') s.set({ effectId: id })
+  else if (kind === 'fixtures') s.selectFixtures([id])
+  else s.selectProps([id])
 }
 
 let connected = false
@@ -75,6 +105,11 @@ function useShortcuts(): void {
       if (mod && e.key.toLowerCase() === 's') {
         e.preventDefault()
         void saveShow(e.shiftKey)
+      } else if (mod && e.key === 'Enter') {
+        e.preventDefault()
+        // A text field hands over what was typed when it loses focus.
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+        for (const { kind, ids } of editing(useStore.getState())) useStore.getState().saveItems(kind, ids)
       } else if (mod && e.key.toLowerCase() === 'z' && !typing) {
         e.preventDefault()
         if (e.shiftKey) s.redo()

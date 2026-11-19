@@ -8,6 +8,7 @@ import { EFFECTS, prepareParams, defaultParams } from '../src/shared/effects'
 import { makeGenericPixelFixture, resolveMode, type OflFixture } from '../src/shared/ofl'
 import { encodeImage } from '../src/shared/images'
 import { autoPlane, compilePatch, layoutSegments, mapImage, mapLayer, toWorld } from '../src/shared/patch'
+import { changedIds, discardItems, editBoth, editDraft, saveItems, unsaved } from '../src/shared/drafts'
 import { newProp, propBox, PROP_TYPES } from '../src/shared/props'
 import { demoShow, emptyShow, newChaser, newLayer, newLook, newStep, normalizeShow, LIBRARY } from '../src/shared/show'
 import type { FromEngine, Show } from '../src/shared/types'
@@ -147,6 +148,7 @@ describe('show files', () => {
   it('opens shows saved before look folders and clock-following chasers existed', () => {
     const old = JSON.parse(JSON.stringify(demoShow()))
     delete old.lookFolders
+    delete old.effectFolders
     for (const c of old.chasers) delete c.tempo
     const show = normalizeShow(old)
     expect(show.lookFolders).toEqual([])
@@ -233,6 +235,59 @@ describe('custom effects', () => {
     expect(Math.max(...frame)).toBeGreaterThan(0.9)
     expect(frame.filter((v) => v === 0).length).toBeGreaterThan(frame.length / 3)
     expect(defaultParams('custom:comet')).toEqual({ speed: 1 })
+  })
+})
+
+describe('drafts', () => {
+  const start = () => {
+    const show = demoShow()
+    return { show, saved: show }
+  }
+  const rename = (id: string, name: string) => (s: Show) => ({ ...s, looks: s.looks.map((l) => (l.id === id ? { ...l, name } : l)) })
+
+  it('keep an edit out of the saved show until it is saved', () => {
+    const before = start()
+    const id = before.show.looks[0].id
+    const edited = editDraft(before, rename(id, 'Changed'))
+    expect(edited.saved).toBe(before.saved)
+    expect(edited.show.looks[0].name).toBe('Changed')
+    expect(changedIds(edited, 'looks')).toEqual([id])
+    expect(unsaved(edited)).toEqual([{ kind: 'looks', id }])
+
+    const kept = saveItems(edited, 'looks', [id])
+    expect(kept.saved.looks[0].name).toBe('Changed')
+    expect(kept.show).toBe(kept.saved)
+
+    const dropped = discardItems(edited, 'looks', [id])
+    expect(dropped.show).toBe(before.saved)
+  })
+
+  it('notice when an edit is taken back by hand', () => {
+    const before = start()
+    const id = before.show.looks[0].id
+    const back = editDraft(editDraft(before, rename(id, 'Changed')), rename(id, before.show.looks[0].name))
+    expect(back.show).toBe(before.saved)
+  })
+
+  it('apply settings and structure right away, and keep the drafts through it', () => {
+    const before = start()
+    const [first, second] = before.show.looks.map((l) => l.id)
+    let now = editDraft(before, rename(first, 'Changed'))
+    now = editDraft(now, (s) => ({ ...s, settings: { ...s.settings, bpm: 97 } }))
+    expect(now.saved.settings.bpm).toBe(97)
+    expect(now.show.settings).toBe(now.saved.settings)
+
+    now = editBoth(now, (s) => ({ ...s, looks: s.looks.filter((l) => l.id !== second) }))
+    expect(now.saved.looks.some((l) => l.id === second)).toBe(false)
+    expect(now.show.looks.some((l) => l.id === second)).toBe(false)
+    expect(now.saved.looks[0].name).not.toBe('Changed')
+    expect(changedIds(now, 'looks')).toEqual([first])
+
+    // Saving one draft leaves the other one a draft.
+    now = editDraft(now, (s) => ({ ...s, fixtures: s.fixtures.map((f, i) => (i === 0 ? { ...f, universe: 99 } : f)) }))
+    now = saveItems(now, 'looks', [first])
+    expect(unsaved(now)).toEqual([{ kind: 'fixtures', id: now.show.fixtures[0].id }])
+    expect(now.saved.fixtures[0].universe).not.toBe(99)
   })
 })
 
@@ -384,6 +439,39 @@ describe('engine', () => {
       expect(status.status.targets).toEqual([{ host: '127.0.0.1', universe: 7, channels: 22, error: null }])
     }
     expect(messages.some((m) => m.type === 'frame' && m.pixels.length === 12)).toBe(true)
+  })
+
+  it('previews the unsaved look from the editor while MIDI keeps playing the saved one', async () => {
+    const show = oneStrip()
+    const { engine, packets, messages, wait } = await rig(show)
+    const work = structuredClone(show)
+    work.looks[0].layers[0].params = { color: '#0000ff' }
+    engine.handle({ type: 'work', show: work })
+    engine.handle({ type: 'preview', id: 'red' })
+    await wait(40)
+    // GRB order: the edited look is blue.
+    expect([...packets.at(-1)!.subarray(18 + 10, 18 + 13)]).toEqual([0, 0, 255])
+
+    // The saved show changes elsewhere: the preview stays.
+    engine.handle({ type: 'show', show: { ...show, name: 'Renamed' } })
+    // Long enough for the next status report, which comes every 100 ms.
+    await wait(150)
+    expect([...packets.at(-1)!.subarray(18 + 10, 18 + 13)]).toEqual([0, 0, 255])
+    const status = messages.filter((m) => m.type === 'status').at(-1)
+    expect(status?.type === 'status' && status.status.active.map((a) => a.lookId)).toEqual(['red'])
+
+    engine.handle({ type: 'preview', id: null })
+    engine.handleMidi({ port: 'test', kind: 'noteon', channel: 0, note: 60, velocity: 127, time: performance.now() })
+    await wait(40)
+    expect([...packets.at(-1)!.subarray(18 + 10, 18 + 13)]).toEqual([128, 255, 0])
+
+    // Saved: nothing is unsaved any more, the preview plays the show itself.
+    engine.handleMidi({ port: 'test', kind: 'noteoff', channel: 0, note: 60, velocity: 0, time: performance.now() })
+    engine.handle({ type: 'show', show: work })
+    engine.handle({ type: 'work', show: null })
+    engine.handle({ type: 'preview', id: 'red' })
+    await wait(40)
+    expect([...packets.at(-1)!.subarray(18 + 10, 18 + 13)]).toEqual([0, 0, 255])
   })
 
   function twoLooks(patch: Partial<ReturnType<typeof newChaser>> = {}): Show {

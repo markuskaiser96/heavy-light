@@ -12,7 +12,7 @@ const VIEWS: { id: View; label: string; hint: string }[] = [
   { id: 'live', label: 'Live', hint: 'Play the show' }
 ]
 
-const confirmDiscard = (): boolean => !useStore.getState().dirty || window.confirm('Discard the changes you have not saved?')
+const confirmDiscard = (): boolean => (!useStore.getState().dirty && useStore.getState().show === useStore.getState().saved) || window.confirm('Discard the changes you have not saved?')
 
 function MidiIndicator() {
   const last = useStore((s) => s.midiLog[0]) as MidiEvent | undefined

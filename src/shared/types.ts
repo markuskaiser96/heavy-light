@@ -10,6 +10,8 @@ export interface Vec3 {
 export interface FixtureInstance {
   id: string
   name: string
+  /** Id of the folder it is filed in. Absent = not in a folder. Folders only organise the list. */
+  folder?: string
   /** Key into Show.definitions. */
   definition: string
   /** Mode name inside the OFL definition. */
@@ -125,6 +127,8 @@ export interface GradientStop {
 export interface CustomEffect {
   id: string
   name: string
+  /** Id of the folder it is filed in. Absent = not in a folder. Folders only organise the list. */
+  folder?: string
   brightness: { mode: 'fixed' | 'curve'; value: number; drive: CurveDrive }
   /** With a curve, the curve picks the place on the gradient: low = its start, high = its end. */
   colour: { mode: 'fixed' | 'curve'; color: string; gradient: GradientStop[]; drive: CurveDrive }
@@ -159,10 +163,13 @@ export interface Look extends Triggerable {
   folder?: string
 }
 
-export interface LookFolder {
+export interface Folder {
   id: string
   name: string
 }
+
+/** The lists that can be sorted into folders, by the field of the show that holds their folders. */
+export type FolderList = 'lookFolders' | 'fixtureFolders' | 'effectFolders' | 'chaserFolders'
 
 export interface ChaserStep {
   id: string
@@ -177,6 +184,8 @@ export type ChaserOrder = 'forward' | 'backward' | 'pingpong' | 'random'
 /** Plays looks one after the other, in time with a tempo. Starts at its first step whenever it is triggered. */
 export interface Chaser extends Triggerable {
   steps: ChaserStep[]
+  /** Id of the folder it is filed in. Absent = not in a folder. Folders only organise the list. */
+  folder?: string
   /** own: runs at `bpm`. midi: follows the MIDI clock of the DAW, and falls back to `bpm` while no clock arrives. */
   tempo: 'own' | 'midi'
   bpm: number
@@ -196,7 +205,10 @@ export interface Show {
   groups: Group[]
   props: StageProp[]
   looks: Look[]
-  lookFolders: LookFolder[]
+  lookFolders: Folder[]
+  fixtureFolders: Folder[]
+  effectFolders: Folder[]
+  chaserFolders: Folder[]
   effects: CustomEffect[]
   chasers: Chaser[]
   images: Record<string, ImageAsset>
@@ -222,6 +234,11 @@ export type ToEngine =
   | { type: 'master'; value: number }
   | { type: 'blackout'; on: boolean }
   | { type: 'output'; on: boolean }
+  /**
+   * The show as the editors have it, with changes that are not saved into the show yet. The preview
+   * plays its looks, effects and chasers; MIDI keeps playing the saved show. null = nothing unsaved.
+   */
+  | { type: 'work'; show: Show | null }
   /** `id` is a look, a chaser or `effect:<id>` for a custom effect, which is then shown on all fixtures with `mapping`. */
   | { type: 'preview'; id: string | null; mapping?: Mapping }
 

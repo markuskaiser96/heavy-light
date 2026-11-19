@@ -4,7 +4,9 @@ import { PROP_TYPES, newProp, propType } from '@shared/props'
 import { newId } from '@shared/show'
 import type { FixtureInstance, PropKind, StageProp, Vec3 } from '@shared/types'
 import { deleteSelection, duplicateSelection, place, type Placed } from '../placement'
-import { editFixture, editProp, useStore } from '../store'
+import { changedIds, editFixture, editProp, useStore } from '../store'
+import { ItemList } from './ItemList'
+import { SaveBar } from './SaveBar'
 import { AddFixtureDialog } from './AddFixtureDialog'
 import { usePatch } from './Stage3D'
 import { Field, isIPv4, NumberInput, Section, Select, TextInput } from './ui'
@@ -15,15 +17,17 @@ export function FixtureList() {
   const selected = useStore((s) => s.selectedFixtures)
   const select = useStore((s) => s.selectFixtures)
   const edit = useStore((s) => s.edit)
+  const editNow = useStore((s) => s.editNow)
   const targets = useStore((s) => s.status?.targets)
   const [adding, setAdding] = useState(false)
   const patch = usePatch()
 
-  const click = (id: string, e: React.MouseEvent) => {
+  const click = (id: string, e: React.MouseEvent, visible: string[]) => {
     if (e.shiftKey && selected.length) {
-      const a = fixtures.findIndex((f) => f.id === selected.at(-1))
-      const b = fixtures.findIndex((f) => f.id === id)
-      select(fixtures.slice(Math.min(a, b), Math.max(a, b) + 1).map((f) => f.id))
+      // From the last one selected to this one, in the order the list shows them.
+      const a = visible.indexOf(selected.at(-1)!)
+      const b = visible.indexOf(id)
+      select(a < 0 ? [id] : visible.slice(Math.min(a, b), Math.max(a, b) + 1))
     } else if (e.metaKey || e.ctrlKey) useStore.getState().set({ selectedFixtures: selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id] })
     else select([id])
   }
@@ -32,34 +36,32 @@ export function FixtureList() {
 
   return (
     <aside className="panel left">
-      <Section
+      <ItemList
+        kind="fixtures"
+        folderList="fixtureFolders"
         title="Fixtures"
+        noun="fixture"
+        items={fixtures}
+        selected={selected}
+        onSelect={click}
+        matches={(f, query) => f.host.includes(query)}
+        lead={(f) => {
+          const failing = targets?.some((t) => t.host === f.host && t.error)
+          return <span className={`dot${failing ? ' bad' : ''}`} title={failing ? 'Cannot be reached' : undefined} />
+        }}
+        meta={(f) => (
+          <>
+            {f.host.split('.').slice(-1)[0]} / {f.universe}.{f.address}
+            {patch.byId.get(f.id) ? '' : ' !'}
+          </>
+        )}
+        empty="No fixtures yet. Add your strips, panels or DMX fixtures to start."
         action={
           <button className="button small primary" onClick={() => setAdding(true)}>
             <Plus size={14} /> Add
           </button>
         }
-      >
-        {fixtures.length === 0 && <p className="empty">No fixtures yet. Add your strips, panels or DMX fixtures to start.</p>}
-        <ul className="list">
-          {fixtures.map((f) => {
-            const failing = targets?.some((t) => t.host === f.host && t.error)
-            const pf = patch.byId.get(f.id)
-            return (
-              <li key={f.id}>
-                <button className={`row${selected.includes(f.id) ? ' on' : ''}`} onClick={(e) => click(f.id, e)}>
-                  <span className={`dot${failing ? ' bad' : ''}`} title={failing ? 'Cannot be reached' : undefined} />
-                  <span className="row-name">{f.name}</span>
-                  <span className="row-meta">
-                    {f.host.split('.').slice(-1)[0]} / {f.universe}.{f.address}
-                    {pf ? '' : ' !'}
-                  </span>
-                </button>
-              </li>
-            )
-          })}
-        </ul>
-      </Section>
+      />
 
       <Section
         title="Groups"
@@ -81,7 +83,7 @@ export function FixtureList() {
                 className="icon subtle"
                 title="Delete group"
                 onClick={() =>
-                  edit((s) => ({
+                  editNow((s) => ({
                     ...s,
                     groups: s.groups.filter((x) => x.id !== g.id),
                     looks: s.looks.map((l) => ({ ...l, layers: l.layers.map((y) => ({ ...y, targets: y.targets.filter((t) => t !== g.id) })) }))
@@ -125,6 +127,7 @@ function PropList() {
   const props = useStore((s) => s.show.props)
   const selected = useStore((s) => s.selectedProps)
   const select = useStore((s) => s.selectProps)
+  const changed = useStore((s) => changedIds(s, 'props').join()).split(',')
   const [menu, setMenu] = useState(false)
 
   const add = (kind: PropKind) => {
@@ -133,7 +136,7 @@ function PropList() {
     const same = s.show.props.filter((p) => p.kind === kind).length
     // New things appear at the front of the stage, next to each other, so they do not hide one another.
     const prop = newProp(kind, newId(), same === 0 ? type.label : `${type.label} ${same + 1}`, { x: +((same % 5) * 0.6).toFixed(2), z: type.person ? 1 : 0 })
-    s.edit((show) => ({ ...show, props: [...show.props, prop] }))
+    s.editNow((show) => ({ ...show, props: [...show.props, prop] }))
     select([prop.id])
     setMenu(false)
   }
@@ -189,6 +192,7 @@ function PropList() {
                   <Icon size={14} />
                 </span>
                 <span className="row-name">{p.name}</span>
+                {changed.includes(p.id) && <span className="unsaved-dot" title="Has changes that are not saved into the show" />}
                 <span className="row-meta">{propType(p.kind).label}</span>
               </button>
             </li>
@@ -327,6 +331,7 @@ function PropInspector({ prop }: { prop: StageProp }) {
           {type.person ? ' At 0° the musician faces the audience.' : prop.kind === 'monitor' ? ' At 0° the speaker points upstage, at the band.' : ''} {HANDLES_NOTE}
         </p>
       </Section>
+      <SaveBar items={[{ kind: 'props', ids: [prop.id] }]} noun="object" />
     </aside>
   )
 }
@@ -376,6 +381,13 @@ export function FixtureInspector() {
           </Section>
         )}
         <p className="hint">Click a fixture or stage object on the stage or in the list to edit it. Shift-click selects several.</p>
+        <SaveBar
+          items={[
+            { kind: 'fixtures', ids: show.fixtures.map((f) => f.id) },
+            { kind: 'props', ids: show.props.map((p) => p.id) }
+          ]}
+          noun="all"
+        />
       </aside>
     )
   }
@@ -417,6 +429,13 @@ export function FixtureInspector() {
             <Trash2 size={14} /> Delete {count} {props.length === 0 ? 'fixtures' : fixtures.length === 0 ? 'objects' : 'things'}
           </button>
         </Section>
+        <SaveBar
+          items={[
+            { kind: 'fixtures', ids: fixtures.map((f) => f.id) },
+            { kind: 'props', ids: props.map((p) => p.id) }
+          ]}
+          noun="selection"
+        />
       </aside>
     )
   }
@@ -496,6 +515,7 @@ export function FixtureInspector() {
         </div>
         <p className="form-note">{HANDLES_NOTE} Pixel 1 sits at the start of the local X axis.</p>
       </Section>
+      <SaveBar items={[{ kind: 'fixtures', ids: [f.id] }]} noun="fixture" />
     </aside>
   )
 }

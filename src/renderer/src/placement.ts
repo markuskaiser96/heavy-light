@@ -77,7 +77,7 @@ export function deleteSelection(): void {
   const s = useStore.getState()
   const gone = new Set([...s.selectedFixtures, ...s.selectedProps])
   if (gone.size === 0) return
-  s.edit((show) => ({
+  s.editNow((show) => ({
     ...show,
     fixtures: show.fixtures.filter((f) => !gone.has(f.id)),
     props: show.props.filter((p) => !gone.has(p.id)),
@@ -112,6 +112,6 @@ export function duplicateSelection(): void {
     position: shifted(f.position)
   }))
   const propCopies = props.map((p) => ({ ...p, id: newId(), name: copyName(p.name), position: shifted(p.position), size: { ...p.size } }))
-  s.edit((show) => ({ ...show, fixtures: [...show.fixtures, ...fixtureCopies], props: [...show.props, ...propCopies] }))
+  s.editNow((show) => ({ ...show, fixtures: [...show.fixtures, ...fixtureCopies], props: [...show.props, ...propCopies] }))
   s.set({ selectedFixtures: fixtureCopies.map((f) => f.id), selectedProps: propCopies.map((p) => p.id) })
 }
