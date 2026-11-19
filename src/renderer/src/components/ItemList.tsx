@@ -30,7 +30,8 @@ export function ItemList<T extends Listed>({
   lead,
   meta,
   action,
-  empty
+  empty,
+  alsoChanged
 }: {
   kind: ItemKind
   folderList: FolderList
@@ -46,6 +47,8 @@ export function ItemList<T extends Listed>({
   /** What stands before the name of a row, and after it. */
   lead: (item: T) => ReactNode
   meta: (item: T) => ReactNode
+  /** Entries to mark as changed beyond those that are drafts themselves. */
+  alsoChanged?: string[]
   /** The "New …" button. */
   action: ReactNode
   empty: string
@@ -151,7 +154,7 @@ export function ItemList<T extends Listed>({
           >
             {lead(item)}
             <span className="row-name">{item.name}</span>
-            {changed.includes(item.id) && <span className="unsaved-dot" title="Has changes that are not saved into the show" />}
+            {(changed.includes(item.id) || alsoChanged?.includes(item.id)) && <span className="unsaved-dot" title="Has changes that are not saved into the show" />}
             <span className="row-meta">{meta(item)}</span>
           </button>
         </li>

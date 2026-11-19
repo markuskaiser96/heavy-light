@@ -3,7 +3,8 @@ import { defaultParams } from './effects'
 import { encodeImage, isImageAsset } from './images'
 import { genericPixelKey, isOflFixture, makeGenericPixelFixture, type OflFixture } from './ofl'
 import { isPropKind, newProp, propType } from './props'
-import type { Chaser, ChaserStep, FixtureInstance, Folder, ImageAsset, Layer, Look, Show } from './types'
+import { flowFromSteps, normalizeFlow, startNode, type OldSteps } from './flow'
+import type { Chaser, FixtureInstance, Folder, ImageAsset, Layer, Look, Show } from './types'
 import drgbFader from './library/drgb-fader.json'
 import ledBar from './library/led-bar-240-8.json'
 import rgbFader from './library/rgb-fader.json'
@@ -67,22 +68,17 @@ export function newLook(name: string, index: number): Look {
   }
 }
 
-export function newStep(lookId: string, beats = 1): ChaserStep {
-  return { id: newId(), lookId, beats }
-}
-
 export function newChaser(name: string, index: number): Chaser {
   return {
     id: newId(),
     name,
     color: LOOK_COLORS[(index + 3) % LOOK_COLORS.length],
-    steps: [],
+    nodes: [startNode()],
+    links: [],
     tempo: 'own',
     bpm: 120,
     speed: 1,
     crossfade: 0,
-    order: 'forward',
-    loop: true,
     fadeIn: 0,
     fadeOut: 150,
     midi: null,
@@ -126,7 +122,11 @@ export function normalizeShow(value: unknown): Show {
     fixtureFolders: folders(raw.fixtureFolders),
     effectFolders: folders(raw.effectFolders),
     chaserFolders: folders(raw.chaserFolders),
-    chasers: (raw.chasers ?? []).map((c, i) => ({ ...newChaser(c.name ?? 'Chaser', i), ...c, steps: (c.steps ?? []).map((step) => ({ ...newStep(''), ...step })) })),
+    chasers: (raw.chasers ?? []).map((c, i) => {
+      // Chasers saved as a list of steps become the flow that plays the same.
+      const { steps: _steps, order: _order, loop: _loop, ...rest } = c as Chaser & OldSteps
+      return { ...newChaser(c.name ?? 'Chaser', i), ...rest, ...normalizeFlow(c as Chaser & OldSteps) }
+    }),
     stage: { ...base.stage, ...raw.stage },
     settings: { ...base.settings, ...raw.settings }
   }
@@ -263,7 +263,7 @@ export function demoShow(): Show {
     id: `chaser-${i + 1}`,
     midi: { channel: 0, note },
     ...patch,
-    steps: steps.map(([n, beats], k) => ({ id: `chaser-${i + 1}-step-${k + 1}`, lookId: `look-${n}`, beats }))
+    ...flowFromSteps({ steps: steps.map(([n, beats]) => ({ lookId: `look-${n}`, beats })) })
   })
   show.chasers = [
     chaser(0, 'Colour walk', 48, { bpm: 120, crossfade: 0.5, fadeOut: 600 }, [[1, 2], [2, 2], [6, 2], [3, 2]]),

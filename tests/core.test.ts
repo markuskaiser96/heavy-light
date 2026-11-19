@@ -8,10 +8,11 @@ import { EFFECTS, prepareParams, defaultParams } from '../src/shared/effects'
 import { makeGenericPixelFixture, resolveMode, type OflFixture } from '../src/shared/ofl'
 import { encodeImage } from '../src/shared/images'
 import { autoPlane, compilePatch, layoutSegments, mapImage, mapLayer, toWorld } from '../src/shared/patch'
-import { changedIds, discardItems, editBoth, editDraft, saveItems, unsaved } from '../src/shared/drafts'
+import { changedIds, discardItems, editBoth, editDraft, regrouped, saveItems, unsaved } from '../src/shared/drafts'
 import { newProp, propBox, PROP_TYPES } from '../src/shared/props'
 import { makeDraw } from '../src/shared/random'
-import { demoShow, emptyShow, newChaser, newLayer, newLook, newStep, normalizeShow, LIBRARY } from '../src/shared/show'
+import { advanceFlow, appendChain, flowFromSteps, flowOver, link, newNode, normalizeFlow, removeNodes, START, startFlow, startNode } from '../src/shared/flow'
+import { demoShow, emptyShow, newChaser, newLayer, newLook, normalizeShow, LIBRARY } from '../src/shared/show'
 import type { FromEngine, Show } from '../src/shared/types'
 
 const lib = (key: string): OflFixture => LIBRARY.find((l) => l.key === key)!.fixture
@@ -305,6 +306,20 @@ describe('randomness', () => {
     expect(places.size).toBeGreaterThan(6)
   })
 
+  it('turns the direction of a layer around', () => {
+    const show = demoShow()
+    const patch = compilePatch(show)
+    for (const mapping of ['fixture', 'span', 'index', 'stageX'] as const) {
+      const layer = { ...newLayer('solid'), mapping }
+      const there = mapLayer(show, patch, layer).u
+      const back = mapLayer(show, patch, { ...layer, reverse: true }).u
+      const top = mapping === 'index' ? (patch.fixtures.length - 1) / patch.fixtures.length : 1
+      expect(back[0]).toBeCloseTo(top - there[0])
+      expect(back[back.length - 1]).toBeCloseTo(top - there[there.length - 1])
+      expect(Math.min(...back)).toBeGreaterThanOrEqual(-1e-6)
+    }
+  })
+
   it('plays a layer on random fixtures, a different one every beat', () => {
     const show = demoShow()
     const layer = { ...newLayer('solid'), id: 'pick', params: { color: '#ffffff' }, pick: { count: 1, beats: 1 } }
@@ -378,6 +393,25 @@ describe('drafts', () => {
     now = saveItems(now, 'looks', [first])
     expect(unsaved(now)).toEqual([{ kind: 'fixtures', id: now.show.fixtures[0].id }])
     expect(now.saved.fixtures[0].universe).not.toBe(99)
+  })
+})
+
+describe('groups as drafts', () => {
+  it('treats putting a fixture into a group as a change of that fixture, until it is saved', () => {
+    const show = demoShow()
+    const [group] = show.groups
+    const outsider = show.fixtures.find((f) => !group.fixtureIds.includes(f.id))!.id
+    const before = { show, saved: show }
+    const now = editDraft(before, (s) => ({ ...s, groups: s.groups.map((g) => (g.id === group.id ? { ...g, fixtureIds: [...g.fixtureIds, outsider] } : g)) }))
+    expect(now.saved.groups).toBe(show.groups)
+    expect(regrouped(now)).toEqual({ fixtures: [outsider], groups: [group.id] })
+    expect(regrouped(now, [group.fixtureIds[0]]).groups).toEqual([])
+    expect(unsaved(now)).toEqual([{ kind: 'groups', id: group.id }])
+
+    const kept = saveItems(now, 'groups', regrouped(now, [outsider]).groups)
+    expect(kept.saved.groups[0].fixtureIds).toContain(outsider)
+    expect(kept.show).toBe(kept.saved)
+    expect(discardItems(now, 'groups', [group.id]).show).toBe(show)
   })
 })
 
@@ -570,8 +604,14 @@ describe('engine', () => {
     blue.layers[0].params = { color: '#0000ff' }
     show.looks.push(blue)
     // 600 bpm: one beat lasts 100 ms.
-    show.chasers = [{ ...newChaser('Chase', 0), id: 'chase', bpm: 600, fadeOut: 0, midi: { channel: 0, note: 72 }, steps: [newStep('red', 1), newStep('blue', 2), newStep('', 1)], ...patch }]
+    show.chasers = [{ ...newChaser('Chase', 0), id: 'chase', bpm: 600, fadeOut: 0, midi: { channel: 0, note: 72 }, ...steps([['red', 1], ['blue', 2], ['', 1]]), ...patch }]
     return show
+  }
+  /** A flow that plays these steps one after the other, with node ids n1, n2 … */
+  function steps(list: [lookId: string, beats: number][], old: { order?: 'forward' | 'backward'; loop?: boolean } = {}) {
+    const flow = flowFromSteps({ steps: list.map(([lookId, beats]) => ({ lookId, beats })), ...old })
+    const names = new Map(flow.nodes.map((n, i) => [n.id, i === 0 ? START : `n${i}`]))
+    return { nodes: flow.nodes.map((n) => ({ ...n, id: names.get(n.id)! })), links: flow.links.map((l) => ({ from: names.get(l.from)!, to: names.get(l.to)! })) }
   }
   it('lets a chaser follow the MIDI clock instead of its own tempo', async () => {
     // Its own tempo is far too slow: 20 bpm, three seconds a beat. The clock runs at about 250 bpm.
@@ -580,12 +620,12 @@ describe('engine', () => {
     try {
       await wait(150)
       engine.handleMidi({ port: 'daw', kind: 'noteon', channel: 1, note: 72, velocity: 100, time: performance.now() })
-      const step = () => messages.flatMap((m) => (m.type === 'status' ? [m.status] : [])).at(-1)!.chasers[0]?.step
+      const step = () => messages.flatMap((m) => (m.type === 'status' ? [m.status] : [])).at(-1)!.chasers[0]?.nodes.join()
       await wait(130)
-      expect(step()).toBe(0)
+      expect(step()).toBe('n1')
       // One beat is 24 ticks, about a quarter of a second: by now the second step (two beats) plays.
       await wait(330)
-      expect(step()).toBe(1)
+      expect(step()).toBe('n2')
       const status = messages.flatMap((m) => (m.type === 'status' ? [m.status] : [])).at(-1)!
       expect(status.clock?.port).toBe('daw')
       expect(status.clock!.bpm).toBeGreaterThan(150)
@@ -596,7 +636,7 @@ describe('engine', () => {
       engine.handleClock('daw', 'stop', performance.now())
       await wait(250)
       expect(messages.flatMap((m) => (m.type === 'status' ? [m.status] : [])).at(-1)!.clock).toBeNull()
-      expect(step()).toBe(1)
+      expect(step()).toBe('n2')
     } finally {
       clearInterval(clock)
     }
@@ -621,7 +661,7 @@ describe('engine', () => {
     await at(450) // looped back to the first step
     expect(pixel(packets.at(-1)!)).toEqual([255, 128, 0])
     const statuses = messages.flatMap((m) => (m.type === 'status' ? [m.status] : []))
-    expect(new Set(statuses.flatMap((x) => x.chasers.map((c) => `${c.chaserId}:${c.step}`)))).toEqual(new Set(['chase:0', 'chase:1', 'chase:2']))
+    expect(new Set(statuses.flatMap((x) => x.chasers.map((c) => `${c.chaserId}:${c.nodes.join()}`)))).toEqual(new Set(['chase:n1', 'chase:n2', 'chase:n3']))
     expect(statuses.some((x) => x.active.length === 1 && x.active[0].lookId === 'blue')).toBe(true)
 
     engine.handleMidi({ port: 'test', kind: 'noteoff', channel: 1, note: 72, velocity: 0, time: performance.now() })
@@ -638,7 +678,7 @@ describe('engine', () => {
   })
 
   it('crossfades between steps and stops after one pass when not looping', async () => {
-    const { engine, packets, wait } = await rig(twoLooks({ crossfade: 1, loop: false, order: 'backward', steps: [newStep('blue', 1), newStep('red', 1)] }))
+    const { engine, packets, wait } = await rig(twoLooks({ crossfade: 1, ...steps([['blue', 1], ['red', 1]], { order: 'backward', loop: false }) }))
     const start = performance.now()
     const at = (ms: number) => wait(Math.max(0, start + ms - performance.now()))
     engine.handle({ type: 'toggle', id: 'chase' })
@@ -651,7 +691,101 @@ describe('engine', () => {
     expect(b).toBeGreaterThan(60)
     expect(b).toBeLessThan(200)
     expect(g).toBeGreaterThan(0)
-    await at(260) // finished
+    await at(250) // blue is over and fades out for as long as it faded in
+    expect(pixel(packets.at(-1)!)[2]).toBeGreaterThan(40)
+    expect(pixel(packets.at(-1)!)[0]).toBe(0)
+    await at(340) // finished
     expect(pixel(packets.at(-1)!)).toEqual([0, 0, 0])
+  })
+
+  it('plays the branches of a flow side by side', async () => {
+    // On the note: red for two beats, and after a wait of one beat blue on top of it for one.
+    const red = newNode('scene', 'red', 2, 200, 0)
+    const wait1 = newNode('wait', '', 1, 200, 80)
+    const blue = newNode('scene', 'blue', 1, 400, 80)
+    const show = twoLooks({ nodes: [startNode(), red, wait1, blue], links: [{ from: START, to: red.id }, { from: START, to: wait1.id }, { from: wait1.id, to: blue.id }] })
+    // Adding light, so both can be seen at once.
+    show.looks[1].layers[0].blend = 'add'
+    const { engine, packets, wait } = await rig(show)
+    const start = performance.now()
+    const at = (ms: number) => wait(Math.max(0, start + ms - performance.now()))
+    engine.handle({ type: 'toggle', id: 'chase' })
+    await at(50)
+    expect(pixel(packets.at(-1)!)).toEqual([255, 128, 0])
+    await at(150)
+    expect(pixel(packets.at(-1)!)).toEqual([255, 128, 255])
+    await at(260) // both are over, nothing follows: the flow has ended by itself
+    expect(pixel(packets.at(-1)!)).toEqual([0, 0, 0])
+  })
+})
+
+describe('flows', () => {
+  type Graph = ReturnType<typeof flowFromSteps>
+  const chaser = (graph: Graph, crossfade = 0) => ({ ...graph, crossfade })
+  const at = (state: ReturnType<typeof startFlow>, graph: Graph) =>
+    state.tokens
+      .map((t) => graph.nodes.find((n) => n.id === t.node)!.lookId)
+      .sort()
+      .join()
+
+  it('turns the old step lists into flows that play the same', () => {
+    const list = [
+      { lookId: 'a', beats: 1 },
+      { lookId: 'b', beats: 2 },
+      { lookId: 'c', beats: 1 }
+    ]
+    const play = (graph: Graph, beats: number[]) => {
+      const state = startFlow(0)
+      return beats.map((b) => (advanceFlow(chaser(graph), state, b, 0, 100), at(state, graph)))
+    }
+    expect(play(flowFromSteps({ steps: list }), [0, 1, 2, 1, 1])).toEqual(['a', 'b', 'c', 'a', 'b'])
+    expect(play(flowFromSteps({ steps: list, order: 'backward', loop: false }), [0, 1, 2, 1])).toEqual(['c', 'b', 'a', ''])
+    expect(play(flowFromSteps({ steps: list, order: 'pingpong' }), [0, 1, 2, 1, 2, 1])).toEqual(['a', 'b', 'c', 'b', 'a', 'b'])
+    // What is left over when a node ends counts towards the next one.
+    expect(play(flowFromSteps({ steps: list }), [0, 3.5])).toEqual(['a', 'c'])
+
+    const old = normalizeShow({ ...JSON.parse(JSON.stringify(emptyShow())), chasers: [{ id: 'c', name: 'Old', steps: list, order: 'forward', loop: true, bpm: 100 }] })
+    expect(old.chasers[0].nodes.map((n) => n.lookId)).toEqual(['', 'a', 'b', 'c'])
+    expect(old.chasers[0].links.length).toBe(4)
+    expect('steps' in old.chasers[0]).toBe(false)
+    expect(normalizeFlow(old.chasers[0])).toEqual({ nodes: old.chasers[0].nodes, links: old.chasers[0].links })
+  })
+
+  it('draws one of several arrows at random, never straight back', () => {
+    const graph = flowFromSteps({ steps: ['a', 'b', 'c', 'd'].map((lookId) => ({ lookId, beats: 1 })), order: 'random' })
+    const state = startFlow(0)
+    const seen: string[] = []
+    for (let i = 0; i < 200; i++) {
+      advanceFlow(chaser(graph), state, i === 0 ? 0 : 1, 0, 100)
+      expect(state.tokens.length).toBe(1)
+      seen.push(at(state, graph))
+    }
+    expect(new Set(seen).size).toBe(4)
+    expect(seen.some((v, i) => i > 0 && v === seen[i - 1])).toBe(false)
+  })
+
+  it('does not multiply where arrows meet again, and ends when nothing follows', () => {
+    // a → b and a → c, both → a: every round would double the places.
+    let graph = appendChain({ nodes: [startNode()], links: [] }, START, ['a'], 1).graph
+    const a = graph.nodes[1].id
+    const b = newNode('scene', 'b', 1, 0, 0)
+    const c = newNode('scene', 'c', 1, 0, 0)
+    graph = { nodes: [...graph.nodes, b, c], links: [...graph.links, { from: a, to: b.id }, { from: a, to: c.id }, { from: b.id, to: a }, { from: c.id, to: a }] }
+    const state = startFlow(0)
+    for (let i = 0; i < 40; i++) advanceFlow(chaser(graph), state, i === 0 ? 0 : 1, 0, 100)
+    expect(state.tokens.length).toBeLessThanOrEqual(2)
+
+    // Without the arrows back, and with a node removed, it runs out.
+    const open = removeNodes({ nodes: graph.nodes, links: graph.links.filter((l) => l.to !== a || l.from === START) }, [c.id])
+    expect(open.links.length).toBe(2)
+    expect(link(open, a, b.id)).toBe(open)
+    const once = startFlow(0)
+    advanceFlow(chaser(open, 0.5), once, 0, 0, 100)
+    advanceFlow(chaser(open, 0.5), once, 2, 0, 100)
+    // b is over; it still fades out for half its length.
+    expect(once.tokens.length).toBe(0)
+    expect(flowOver(once)).toBe(false)
+    advanceFlow(chaser(open, 0.5), once, 0.6, 0, 100)
+    expect(flowOver(once)).toBe(true)
   })
 })

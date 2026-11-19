@@ -22,6 +22,16 @@ const MAPPINGS: { value: Mapping; label: string }[] = [
   { value: 'stageZ', label: 'From back to front' }
 ]
 
+/** What each direction becomes when it is turned around. */
+const REVERSED: Record<Mapping, string> = {
+  fixture: 'from the end of each fixture',
+  span: 'from the last fixture back to the first',
+  index: 'last fixture first',
+  stageX: 'right to left',
+  stageY: 'from the top down',
+  stageZ: 'from front to back'
+}
+
 const BLENDS: { value: Blend; label: string }[] = [
   { value: 'normal', label: 'Cover what is below' },
   { value: 'add', label: 'Add light' },
@@ -274,6 +284,13 @@ function LayerEditor({ look, layer }: { look: Look; layer: Layer }) {
               <Select value={layer.mapping} onChange={(mapping) => editLayer(look.id, layer.id, { mapping })} options={MAPPINGS} />
             </Field>
           )}
+          {layer.effect !== 'image' && (
+            <Toggle
+              value={!!layer.reverse}
+              onChange={(reverse) => editLayer(look.id, layer.id, { reverse: reverse || undefined })}
+              label={`The other way round: ${REVERSED[layer.mapping]}`}
+            />
+          )}
           <Field label="Mixing" wide>
             <Select value={layer.blend} onChange={(blend) => editLayer(look.id, layer.id, { blend })} options={BLENDS} />
           </Field>
@@ -446,8 +463,8 @@ export function LookEditor() {
                 editNow((s) => ({
                   ...s,
                   looks: s.looks.filter((l) => l.id !== look.id),
-                  // Steps that showed this look stay in place as dark steps, so chasers keep their timing.
-                  chasers: s.chasers.map((c) => ({ ...c, steps: c.steps.map((step) => (step.lookId === look.id ? { ...step, lookId: '' } : step)) }))
+                  // Nodes that showed this look stay in place as dark ones, so chasers keep their timing.
+                  chasers: s.chasers.map((c) => (c.nodes.some((n) => n.lookId === look.id) ? { ...c, nodes: c.nodes.map((n) => (n.lookId === look.id ? { ...n, lookId: '' } : n)) } : c))
                 }))
                 selectLook(null)
               }}

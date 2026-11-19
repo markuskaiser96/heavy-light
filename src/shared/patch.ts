@@ -207,6 +207,11 @@ export function mapLayer(show: Show, patch: Patch, layer: Layer): { cells: Uint3
       for (let i = 0; i < total; i++) u[i] = range > 1e-6 ? (patch.positions[cells[i] * 3 + axis] - min) / range : 0.5
     }
   }
+  if (layer.reverse) {
+    // Fixture by fixture stops short of 1 (see above), so its mirror image must stop short of it too.
+    const top = layer.mapping === 'index' && targets.length > 0 ? (targets.length - 1) / targets.length : 1
+    for (let i = 0; i < total; i++) u[i] = top - u[i]
+  }
   return { cells, u, owner, owners: targets.length }
 }
 

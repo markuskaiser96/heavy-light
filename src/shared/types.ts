@@ -96,6 +96,8 @@ export interface Layer {
    */
   pick?: { count: number; beats: number }
   mapping: Mapping
+  /** Turns the direction of the mapping around: right to left, last fixture first, from the top down. */
+  reverse?: boolean
   blend: Blend
   opacity: number
 }
@@ -182,19 +184,33 @@ export interface Folder {
 /** The lists that can be sorted into folders, by the field of the show that holds their folders. */
 export type FolderList = 'lookFolders' | 'fixtureFolders' | 'effectFolders' | 'chaserFolders'
 
-export interface ChaserStep {
+/** One box of a chaser's flow chart. */
+export interface FlowNode {
   id: string
-  /** Look shown during this step. Empty = dark. */
+  /** start: where the flow begins, takes no time. scene: shows a look for `beats`. wait: lets `beats` pass. */
+  kind: 'start' | 'scene' | 'wait'
+  /** Scene only. Empty = dark. */
   lookId: string
-  /** Length in beats. */
+  /** Length in beats (quarter notes). */
   beats: number
+  /** Where it sits in the editor. */
+  x: number
+  y: number
+  /** When it is over: start all the nodes its arrows point to, or one of them drawn at random. */
+  next: 'all' | 'one'
 }
 
-export type ChaserOrder = 'forward' | 'backward' | 'pingpong' | 'random'
+/** An arrow of the flow chart: when `from` is over, `to` starts. */
+export interface FlowLink {
+  from: string
+  to: string
+}
 
-/** Plays looks one after the other, in time with a tempo. Starts at its first step whenever it is triggered. */
+/** Scenes linked in time as a flow chart, started by one MIDI note. See shared/flow.ts. */
 export interface Chaser extends Triggerable {
-  steps: ChaserStep[]
+  /** Always holds exactly one start node. */
+  nodes: FlowNode[]
+  links: FlowLink[]
   /** Id of the folder it is filed in. Absent = not in a folder. Folders only organise the list. */
   folder?: string
   /** own: runs at `bpm`. midi: follows the MIDI clock of the DAW, and falls back to `bpm` while no clock arrives. */
@@ -202,11 +218,8 @@ export interface Chaser extends Triggerable {
   bpm: number
   /** Runs this many times as fast as the step lengths say: 2 = double time, 0.5 = half time. */
   speed: number
-  /** Share of each step (0..1) spent fading over from the previous step. 0 = hard cut. */
+  /** Share of each scene (0..1) spent fading over from what came before. 0 = hard cut. */
   crossfade: number
-  order: ChaserOrder
-  /** false: stops by itself after one pass. */
-  loop: boolean
 }
 
 export interface Show {
@@ -286,10 +299,10 @@ export interface OutputTarget {
 export interface EngineStatus {
   /** Looks currently contributing light, whether started directly or by a chaser. */
   active: { lookId: string; level: number }[]
-  /** Running chasers and the step each one is on. */
-  chasers: { chaserId: string; level: number; step: number }[]
-  /** Step of the chaser being previewed in the editor. */
-  previewStep: number | null
+  /** Running chasers and the nodes each one is on. */
+  chasers: { chaserId: string; level: number; nodes: string[] }[]
+  /** Nodes the chaser being previewed in the editor is on. */
+  previewNodes: string[]
   master: number
   blackout: boolean
   output: boolean

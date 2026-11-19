@@ -2202,3 +2202,236 @@ input[type='range']::-webkit-slider-thumb {
 .midi-actions .icon {
   vertical-align: middle;
 }
+
+/* ---------- flow chart of a chaser ---------- */
+
+.flow-dock {
+  display: flex;
+  flex-direction: column;
+  height: 50%;
+  min-height: 220px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+
+.flow-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.flow-tools .button:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.flow-help {
+  margin-left: 8px;
+  min-width: 0;
+  color: var(--dim);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flow {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  /* A dot grid, so moving the chart can be seen. */
+  background-color: var(--bg);
+  background-image: radial-gradient(circle, #1f2331 1px, transparent 1.2px);
+  background-size: 24px 24px;
+}
+
+.flow:active {
+  cursor: grabbing;
+}
+
+.flow.drawing {
+  cursor: crosshair;
+}
+
+.flow-world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+
+.flow-links {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+}
+
+.flow-link .line,
+.flow-draft {
+  fill: none;
+  stroke: #4a5068;
+  stroke-width: 1.6;
+}
+
+.flow-link .hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  cursor: pointer;
+}
+
+.flow-link:hover .line {
+  stroke: var(--muted);
+}
+
+.flow-link.on .line,
+.flow-draft {
+  stroke: var(--accent);
+}
+
+.flow-draft {
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+
+#flow-arrow path {
+  fill: #4a5068;
+}
+
+#flow-arrow-on path {
+  fill: var(--accent);
+}
+
+.flow-node {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 14px 0 0;
+  border-radius: 9px;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  cursor: grab;
+  transition: box-shadow 0.12s, border-color 0.12s;
+}
+
+.flow-node.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.flow-node.target {
+  border-color: var(--signal);
+  box-shadow: 0 0 0 1px var(--signal);
+}
+
+/* The node the flow is on right now glows in the colour of its scene. */
+.flow-node.playing {
+  background: color-mix(in srgb, var(--look) 26%, var(--raised));
+  box-shadow: 0 0 18px color-mix(in srgb, var(--look) 55%, transparent);
+}
+
+.flow-node.wait.playing,
+.flow-node.start.playing {
+  background: var(--raised-2);
+  box-shadow: 0 0 14px rgba(92, 200, 255, 0.35);
+}
+
+.flow-node.wait {
+  border-style: dashed;
+}
+
+.flow-node.start {
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px 0 4px;
+  border-radius: 26px;
+  color: var(--signal);
+  background: rgba(92, 200, 255, 0.1);
+  border-color: rgba(92, 200, 255, 0.35);
+}
+
+.flow-chip {
+  align-self: stretch;
+  width: 6px;
+  flex: none;
+  border-radius: 8px 0 0 8px;
+  background: var(--look);
+}
+
+.flow-node.wait .flow-chip {
+  background: transparent;
+}
+
+.flow-text {
+  display: grid;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.flow-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.flow-node.start .flow-name {
+  font-size: 12px;
+}
+
+.flow-meta {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.flow-random {
+  position: absolute;
+  right: 14px;
+  top: 5px;
+  color: var(--accent);
+}
+
+/* Where arrows start: drag from here onto the node that comes next. */
+.flow-port {
+  position: absolute;
+  right: -7px;
+  top: 50%;
+  width: 13px;
+  height: 13px;
+  margin-top: -6.5px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 2px solid #4a5068;
+  cursor: crosshair;
+}
+
+.flow-port:hover {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.flow-note {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  color: var(--dim);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* A group that holds only part of the selection. */
+.chip.some {
+  border-color: var(--accent);
+  border-style: dashed;
+  color: var(--text);
+}

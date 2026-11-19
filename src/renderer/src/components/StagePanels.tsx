@@ -4,7 +4,7 @@ import { PROP_TYPES, newProp, propType } from '@shared/props'
 import { newId } from '@shared/show'
 import type { FixtureInstance, PropKind, StageProp, Vec3 } from '@shared/types'
 import { deleteSelection, duplicateSelection, place, type Placed } from '../placement'
-import { changedIds, editFixture, editProp, useStore } from '../store'
+import { changedIds, editFixture, editProp, regrouped, useStore } from '../store'
 import { ItemList } from './ItemList'
 import { SaveBar } from './SaveBar'
 import { AddFixtureDialog } from './AddFixtureDialog'
@@ -16,7 +16,6 @@ export function FixtureList() {
   const groups = useStore((s) => s.show.groups)
   const selected = useStore((s) => s.selectedFixtures)
   const select = useStore((s) => s.selectFixtures)
-  const edit = useStore((s) => s.edit)
   const editNow = useStore((s) => s.editNow)
   const targets = useStore((s) => s.status?.targets)
   const [adding, setAdding] = useState(false)
@@ -32,7 +31,9 @@ export function FixtureList() {
     else select([id])
   }
 
-  const makeGroup = () => edit((s) => ({ ...s, groups: [...s.groups, { id: newId(), name: `Group ${s.groups.length + 1}`, fixtureIds: selected }] }))
+  // Joined, so the list only draws again when the set changes.
+  const moved = useStore((s) => regrouped(s).fixtures.join()).split(',')
+  const makeGroup = () => editNow((s) => ({ ...s, groups: [...s.groups, { id: newId(), name: `Group ${s.groups.length + 1}`, fixtureIds: selected }] }))
 
   return (
     <aside className="panel left">
@@ -44,6 +45,7 @@ export function FixtureList() {
         items={fixtures}
         selected={selected}
         onSelect={click}
+        alsoChanged={moved}
         matches={(f, query) => f.host.includes(query)}
         lead={(f) => {
           const failing = targets?.some((t) => t.host === f.host && t.error)
@@ -76,7 +78,7 @@ export function FixtureList() {
           {groups.map((g) => (
             <li key={g.id} className="row group-row">
               <button className="row-name link" title="Select these fixtures" onClick={() => select(g.fixtureIds.filter((id) => fixtures.some((f) => f.id === id)))}>
-                <TextInputInline value={g.name} onChange={(name) => edit((s) => ({ ...s, groups: s.groups.map((x) => (x.id === g.id ? { ...x, name } : x)) }))} />
+                <TextInputInline value={g.name} onChange={(name) => editNow((s) => ({ ...s, groups: s.groups.map((x) => (x.id === g.id ? { ...x, name } : x)) }))} />
               </button>
               <span className="row-meta">{g.fixtureIds.length}</span>
               <button
@@ -271,6 +273,42 @@ function RotationFields({ items, presets }: { items: Placed[]; presets?: boolean
   )
 }
 
+/** The groups of the show as chips: click one to put the given fixtures into it or take them out. */
+function GroupChips({ ids }: { ids: string[] }) {
+  const groups = useStore((s) => s.show.groups)
+  const edit = useStore((s) => s.edit)
+  if (groups.length === 0) return <p className="empty">No groups yet. Select several fixtures and use “Group selection” on the left.</p>
+  return (
+    <>
+      <div className="chips">
+        {groups.map((g) => {
+          const inside = ids.filter((id) => g.fixtureIds.includes(id)).length
+          const all = inside === ids.length
+          return (
+            <button
+              key={g.id}
+              className={`chip${all ? ' on' : inside ? ' some' : ''}`}
+              title={all ? `Take out of ${g.name}` : `Put into ${g.name}`}
+              aria-pressed={all}
+              onClick={() =>
+                // A draft like the rest of the fixture: saved or discarded with it.
+                edit((s) => ({
+                  ...s,
+                  groups: s.groups.map((x) => (x.id !== g.id ? x : { ...x, fixtureIds: all ? x.fixtureIds.filter((id) => !ids.includes(id)) : [...x.fixtureIds, ...ids.filter((id) => !x.fixtureIds.includes(id))] }))
+                }))
+              }
+            >
+              {g.name}
+              {!all && inside > 0 && ` (${inside} of ${ids.length})`}
+            </button>
+          )
+        })}
+      </div>
+      <p className="form-note">Lit groups contain {ids.length === 1 ? 'this fixture' : 'all selected fixtures'}. Click a group to put {ids.length === 1 ? 'it' : 'them'} in or take {ids.length === 1 ? 'it' : 'them'} out.</p>
+    </>
+  )
+}
+
 const HANDLES_NOTE = 'On the stage, drag the handles (G moves, R rotates) or use the keys shown below the stage.'
 
 function PropInspector({ prop }: { prop: StageProp }) {
@@ -344,6 +382,10 @@ export function FixtureInspector() {
   const patch = usePatch()
   const selectedProps = useStore((s) => s.selectedProps)
   const fixtures = show.fixtures.filter((f) => selected.includes(f.id))
+  // Groups the selected fixtures were put into or taken out of: saved together with them.
+  const regroupedHere = useStore((s) => regrouped(s, s.selectedFixtures).groups.join())
+    .split(',')
+    .filter(Boolean)
   const props = show.props.filter((p) => selectedProps.includes(p.id))
   const count = fixtures.length + props.length
 
@@ -384,6 +426,7 @@ export function FixtureInspector() {
         <SaveBar
           items={[
             { kind: 'fixtures', ids: show.fixtures.map((f) => f.id) },
+            { kind: 'groups', ids: show.groups.map((g) => g.id) },
             { kind: 'props', ids: show.props.map((p) => p.id) }
           ]}
           noun="all"
@@ -424,6 +467,11 @@ export function FixtureInspector() {
           <RotationFields items={[...fixtures, ...props]} presets={props.length === 0} />
           <p className="form-note">These angles apply to everything selected. {HANDLES_NOTE} Handles and keys move and turn the selection as one piece.</p>
         </Section>
+        {fixtures.length > 0 && (
+          <Section title="Groups">
+            <GroupChips ids={fixtures.map((f) => f.id)} />
+          </Section>
+        )}
         <Section title="Remove">
           <button className="button danger" onClick={deleteSelection}>
             <Trash2 size={14} /> Delete {count} {props.length === 0 ? 'fixtures' : fixtures.length === 0 ? 'objects' : 'things'}
@@ -432,6 +480,7 @@ export function FixtureInspector() {
         <SaveBar
           items={[
             { kind: 'fixtures', ids: fixtures.map((f) => f.id) },
+            { kind: 'groups', ids: regroupedHere },
             { kind: 'props', ids: props.map((p) => p.id) }
           ]}
           noun="selection"
@@ -515,7 +564,17 @@ export function FixtureInspector() {
         </div>
         <p className="form-note">{HANDLES_NOTE} Pixel 1 sits at the start of the local X axis.</p>
       </Section>
-      <SaveBar items={[{ kind: 'fixtures', ids: [f.id] }]} noun="fixture" />
+
+      <Section title="Groups">
+        <GroupChips ids={[f.id]} />
+      </Section>
+      <SaveBar
+        items={[
+          { kind: 'fixtures', ids: [f.id] },
+          { kind: 'groups', ids: regroupedHere }
+        ]}
+        noun="fixture"
+      />
     </aside>
   )
 }

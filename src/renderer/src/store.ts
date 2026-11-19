@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { changedIds, discardItems, editBoth, editDraft, saveItems, unsaved, type Drafts, type ItemKind } from '@shared/drafts'
+import { changedIds, discardItems, editBoth, editDraft, regrouped, saveItems, unsaved, type Drafts, type ItemKind } from '@shared/drafts'
 import { demoShow, emptyShow, normalizeShow } from '@shared/show'
 import type { Chaser, CustomEffect, EngineStatus, FixtureInstance, Layer, Look, Mapping, MidiEvent, Show, StageProp } from '@shared/types'
 import type { HeavyApi } from '../../preload'
@@ -36,7 +36,7 @@ export type View = 'stage' | 'looks' | 'effects' | 'chasers' | 'midi' | 'live'
 /** Latest pixel colours from the engine. Kept outside React state: it changes 60 times a second. */
 export const frame: { pixels: Uint8Array } = { pixels: new Uint8Array(0) }
 
-export { changedIds, unsaved, type ItemKind }
+export { changedIds, regrouped, unsaved, type ItemKind }
 
 /** One undo step: the show as the editors have it, and the show as it is saved. */
 type Snapshot = Drafts
@@ -62,6 +62,8 @@ export interface State {
   closedFolders: string[]
   layerId: string | null
   chaserId: string | null
+  /** Nodes selected in the flow chart of the chaser being edited. */
+  flowNodes: string[]
   effectId: string | null
   /** How the effect being built in the Effects tab is laid over the fixtures on stage. */
   effectMapping: Mapping
@@ -141,6 +143,7 @@ export const useStore = create<State>((set, get) => ({
   closedFolders: [],
   layerId: null,
   chaserId: null,
+  flowNodes: [],
   effectId: null,
   effectMapping: 'fixture',
   preview: true,
@@ -187,7 +190,7 @@ export const useStore = create<State>((set, get) => ({
     set({ lookId: id, layerId: look?.layers[0]?.id ?? null, learning: false })
   },
   selectLayer: (id) => set({ layerId: id }),
-  selectChaser: (id) => set({ chaserId: id, learning: false }),
+  selectChaser: (id) => set({ chaserId: id, flowNodes: [], learning: false }),
   set: (partial) => set(partial),
   load: (show, path) =>
     set({
@@ -237,7 +240,7 @@ export const editLayer = (lookId: string, layerId: string, patch: Partial<Layer>
 // ---------- drafts ----------
 
 /** Where each kind of entry is edited. */
-export const VIEW_OF: Record<ItemKind, View> = { fixtures: 'stage', props: 'stage', looks: 'looks', effects: 'effects', chasers: 'chasers' }
+export const VIEW_OF: Record<ItemKind, View> = { fixtures: 'stage', groups: 'stage', props: 'stage', looks: 'looks', effects: 'effects', chasers: 'chasers' }
 
 /** What the save bar of the current view would save: the entries being edited there. */
 export function editing(s: State): { kind: ItemKind; ids: string[] }[] {
@@ -249,6 +252,8 @@ export function editing(s: State): { kind: ItemKind; ids: string[] }[] {
   const all = s.selectedFixtures.length + s.selectedProps.length === 0
   return [
     { kind: 'fixtures', ids: all ? s.show.fixtures.map((f) => f.id) : s.selectedFixtures },
+    // Putting a fixture into a group or taking it out is saved with the fixture.
+    { kind: 'groups', ids: all ? s.show.groups.map((g) => g.id) : regrouped(s, s.selectedFixtures).groups },
     { kind: 'props', ids: all ? s.show.props.map((p) => p.id) : s.selectedProps }
   ]
 }

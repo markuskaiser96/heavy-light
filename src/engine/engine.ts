@@ -3,6 +3,7 @@ import { Comp } from '@shared/ofl'
 import { compilePatch, type Patch, type PatchedFixture } from '@shared/patch'
 import { ARTNET_PORT, type Chaser, type EngineStatus, type FromEngine, type Look, type Mapping, type MidiEvent, type Show, type ToEngine } from '@shared/types'
 import { ARTNET_HEADER, createArtDmx, finishArtDmx } from './artnet'
+import { advanceFlow, flowOver, nextChange, nodeOf, startFlow, tokenLevel, type FlowState } from '@shared/flow'
 import { EFFECT_PREVIEW, LookRenderer, type ActiveLook } from './render'
 import { Samples } from './stats'
 
@@ -24,7 +25,7 @@ interface FixtureOut {
 
 /** Counts beats for something that plays: along the MIDI clock while there is one, else at a tempo of its own. */
 interface Counter {
-  /** A look: beats since it started. A chaser: beats played of the current step. */
+  /** A look: beats since it started. Not used by chasers, whose places count for themselves. */
   beat: number
   /** When `beat` was last moved on, and where the MIDI clock stood then (null while counting at its own tempo). */
   movedAt: number
@@ -43,19 +44,8 @@ interface Playing extends Counter {
   startedAt: number
 }
 
-/** A chaser that is playing. */
-interface Running extends Playing {
-  /** Step being shown, and the one it is fading over from (-1 = none). */
-  index: number
-  previous: number
-  stepStartedAt: number
-  previousStartedAt: number
-  direction: 1 | -1
-  /** Steps played so far, including the current one. */
-  played: number
-  /** A chaser that does not loop has reached its end. */
-  done: boolean
-}
+/** A chaser that is playing: the places its flow is at. */
+interface Running extends Playing, FlowState {}
 
 /** MIDI clock sends this many ticks per quarter note. */
 /** Per look: how strongly it is shown this frame, and its effect time. */
@@ -75,7 +65,6 @@ const TICKS_PER_BEAT = 24
 /** Without a tick for this long (ms) the clock counts as stopped. The slowest tempo, 20 bpm, ticks every 125 ms. */
 const CLOCK_TIMEOUT = 500
 /** Shortest step, in beats. */
-const MIN_STEP = 0.01
 
 export interface EngineOptions {
   emit: (message: FromEngine) => void
@@ -264,7 +253,7 @@ export class Engine {
     // A step that ends on this tick changes now, not at the next frame.
     const position = this.clockBeats(time)
     const due = (chaser: Chaser | undefined, r: Running | null): boolean =>
-      !!chaser && !!r && chaser.tempo === 'midi' && r.clockAt !== null && r.beat + (position - r.clockAt) * (chaser.speed > 0 ? chaser.speed : 1) >= stepBeats(chaser, r.index) - 1e-6
+      !!chaser && !!r && chaser.tempo === 'midi' && r.clockAt !== null && (position - r.clockAt) * speedOf(chaser) >= nextChange(chaser, r) - 1e-6
     if ([...this.runs].some(([id, r]) => due(this.chasers.get(id), r)) || due((this.work?.chasers ?? this.chasers).get(this.previewId ?? ''), this.previewRun)) this.tick(performance.now())
   }
 
@@ -296,8 +285,10 @@ export class Engine {
   }
 
   /** Moves a chaser on to where it should be at `now`, at its own tempo or along the MIDI clock. */
-  private run(chaser: Chaser, r: Running, now: number, loop: boolean): void {
-    advance(chaser, r, this.count(r, chaser.bpm, chaser.tempo === 'midi', now) * (chaser.speed > 0 ? chaser.speed : 1), now, loop)
+  private run(chaser: Chaser, r: Running, now: number): void {
+    const speed = speedOf(chaser)
+    const beats = this.count(r, chaser.bpm, chaser.tempo === 'midi', now) * speed
+    advanceFlow(chaser, r, beats, now, r.beatLength / speed)
   }
 
   /** Shows the custom effect being edited in the Effects tab on all fixtures. */
@@ -341,7 +332,7 @@ export class Engine {
       return
     }
     const now = performance.now()
-    if (chaser) this.runs.set(id, startRun(chaser, now, current?.fade ?? 0, intensity))
+    if (chaser) this.runs.set(id, startRun(now, current?.fade ?? 0, intensity))
     else this.playing.set(id, { ...counter(now), on: true, fade: current?.fade ?? 0, intensity, startedAt: now })
   }
 
@@ -427,9 +418,11 @@ export class Engine {
         this.runs.delete(id)
         continue
       }
-      this.run(chaser, r, now, chaser.loop)
+      this.run(chaser, r, now)
+      // A flow that has run out stops by itself.
+      if (flowOver(r)) r.on = false
       if (!fade(r, chaser, dt)) this.runs.delete(id)
-      else this.showStep(chaser, r, now, r.fade * r.intensity)
+      else this.showFlow(chaser, r, now, r.fade * r.intensity)
     }
     // What is being edited comes from the work show if there is one; it is then drawn over what MIDI plays.
     const edited: { show: Show | null; looks: Map<string, Look>; chasers: Map<string, Chaser> } = this.work ?? { show: this.show, looks: this.looks, chasers: this.chasers }
@@ -438,10 +431,11 @@ export class Engine {
     if (this.previewId) {
       const chaser = edited.chasers.get(this.previewId)
       if (chaser) {
-        // In the editor a chaser always loops, so every step can be judged.
-        this.previewRun ??= startRun(chaser, now, 1, 1)
-        this.run(chaser, this.previewRun, now, true)
-        this.showStep(chaser, this.previewRun, now, 1, shown)
+        // In the editor a flow that has run out starts again, so every node can be judged.
+        if (this.previewRun && flowOver(this.previewRun)) this.previewRun = null
+        this.previewRun ??= startRun(now, 1, 1)
+        this.run(chaser, this.previewRun, now)
+        this.showFlow(chaser, this.previewRun, now, 1, shown)
       } else {
         this.previewRun = null
         this.previewCount.beat += this.count(this.previewCount, edited.show?.settings.bpm ?? bpm, true, now)
@@ -489,15 +483,15 @@ export class Engine {
     existing.level = Math.min(1, existing.level + level)
   }
 
-  /** Adds the current step of a chaser and, while it fades over, the step before. */
-  private showStep(chaser: Chaser, r: Running, now: number, level: number, levels = this.levels): void {
-    const step = chaser.steps[r.index]
-    if (!step) return
-    const share = Math.min(1, chaser.crossfade)
-    const x = share > 0 && r.previous >= 0 ? Math.min(1, r.beat / (stepBeats(chaser, r.index) * share)) : 1
-    this.showLook(step.lookId, level * x, (now - r.stepStartedAt) / 1000, r.beat, levels)
-    const previous = chaser.steps[r.previous]
-    if (x < 1 && previous) this.showLook(previous.lookId, level * (1 - x), (now - r.previousStartedAt) / 1000, (now - r.previousStartedAt) / r.beatLength, levels)
+  /** Adds the scenes a chaser is on, and the ones still fading out under them. */
+  private showFlow(chaser: Chaser, r: Running, now: number, level: number, levels = this.levels): void {
+    const speed = speedOf(chaser)
+    for (const t of r.tokens) {
+      const x = tokenLevel(chaser, t)
+      // Effects count the beats of the song, not the beats of a chaser played faster or slower.
+      if (x > 0) this.showLook(nodeOf(chaser, t.node)!.lookId, level * x, (now - t.startedAt) / 1000, t.beat / speed, levels)
+    }
+    for (const tail of r.tails) this.showLook(tail.lookId, level * (1 - tail.since / tail.fade), (now - tail.startedAt) / 1000, (tail.length + tail.since) / speed, levels)
   }
 
   private writeOutput(): void {
@@ -539,8 +533,8 @@ export class Engine {
   private status(): EngineStatus {
     return {
       active: [...this.levels, ...this.previewLevels].filter(([lookId]) => lookId !== EFFECT_PREVIEW).map(([lookId, l]) => ({ lookId, level: l.level })),
-      chasers: [...this.runs].map(([chaserId, r]) => ({ chaserId, level: r.fade * r.intensity, step: r.index })),
-      previewStep: this.previewRun?.index ?? null,
+      chasers: [...this.runs].map(([chaserId, r]) => ({ chaserId, level: r.fade * r.intensity, nodes: r.tokens.map((t) => t.node) })),
+      previewNodes: this.previewRun?.tokens.map((t) => t.node) ?? [],
       master: this.master,
       blackout: this.blackout,
       output: this.output,
@@ -564,92 +558,11 @@ function fade(p: Playing, item: { fadeIn: number; fadeOut: number }, dt: number)
   return p.on || p.fade > 0
 }
 
-function startRun(chaser: Chaser, now: number, fadeFrom: number, intensity: number): Running {
-  return {
-    ...counter(now),
-    on: true,
-    fade: fadeFrom,
-    intensity,
-    startedAt: now,
-    index: chaser.order === 'backward' ? Math.max(0, chaser.steps.length - 1) : 0,
-    previous: -1,
-    stepStartedAt: now,
-    previousStartedAt: now,
-    direction: 1,
-    played: 1,
-    done: false
-  }
+function startRun(now: number, fadeFrom: number, intensity: number): Running {
+  return { ...counter(now), on: true, fade: fadeFrom, intensity, startedAt: now, ...startFlow(now) }
 }
 
-/** Length of a step in beats. */
-function stepBeats(chaser: Chaser, index: number): number {
-  return Math.max(MIN_STEP, chaser.steps[index]?.beats ?? 1)
-}
-
-/**
- * Moves a chaser on by `beats`. What is left over when a step ends counts towards the next one,
- * so the chaser keeps its tempo no matter when frames happen.
- */
-function advance(chaser: Chaser, r: Running, beats: number, now: number, loop: boolean): void {
-  const n = chaser.steps.length
-  if (n === 0) return
-  if (r.index >= n) r.index = 0
-  r.beat += beats
-  for (let guard = 0; !r.done; guard++) {
-    const length = stepBeats(chaser, r.index)
-    if (r.beat < length - 1e-6) break
-    if (guard > 2000) {
-      // Far behind, e.g. the computer was asleep: carry on from here.
-      r.beat = 0
-      r.stepStartedAt = now
-      break
-    }
-    const next = nextStep(chaser, r, loop)
-    if (next < 0) {
-      r.done = true
-      r.on = false
-      break
-    }
-    r.beat = Math.max(0, r.beat - length)
-    r.previous = r.index
-    r.previousStartedAt = r.stepStartedAt
-    r.index = next
-    r.stepStartedAt = now - r.beat * r.beatLength
-    r.played++
-  }
-}
-
-/** Index of the step after the current one, or -1 when a chaser that does not loop is finished. */
-function nextStep(chaser: Chaser, r: Running, loop: boolean): number {
-  const n = chaser.steps.length
-  switch (chaser.order) {
-    case 'backward':
-      return r.index > 0 ? r.index - 1 : loop ? n - 1 : -1
-    case 'pingpong': {
-      if (n === 1) return loop ? 0 : -1
-      const next = r.index + r.direction
-      if (next >= n) {
-        r.direction = -1
-        return n - 2
-      }
-      if (next < 0) {
-        if (!loop) return -1
-        r.direction = 1
-        return 1
-      }
-      return next
-    }
-    case 'random': {
-      if (!loop && r.played >= n) return -1
-      if (n === 1) return 0
-      // Any step but the current one.
-      const pick = Math.floor(Math.random() * (n - 1))
-      return pick >= r.index ? pick + 1 : pick
-    }
-    default:
-      return r.index < n - 1 ? r.index + 1 : loop ? 0 : -1
-  }
-}
+const speedOf = (chaser: Chaser): number => (chaser.speed > 0 ? chaser.speed : 1)
 
 function describeSendError(err: Error): string {
   const code = (err as NodeJS.ErrnoException).code

@@ -3,10 +3,11 @@ import type { Show } from './types'
 /**
  * Edits wait as drafts until the user saves them: the editors work on one copy of the show, while
  * MIDI and the file keep the saved one. This holds for the entries of the lists below; everything
- * else (settings, folders, groups, pictures) is the same in both copies at all times.
+ * else (settings, folders, pictures) is the same in both copies at all times. A group is a draft for
+ * who is in it; the editors show that as a change of the fixtures concerned.
  */
-export type ItemKind = 'fixtures' | 'props' | 'looks' | 'effects' | 'chasers'
-export const ITEM_KINDS: ItemKind[] = ['fixtures', 'props', 'looks', 'effects', 'chasers']
+export type ItemKind = 'fixtures' | 'groups' | 'props' | 'looks' | 'effects' | 'chasers'
+export const ITEM_KINDS: ItemKind[] = ['fixtures', 'groups', 'props', 'looks', 'effects', 'chasers']
 
 export interface Drafts {
   /** The show as the editors have it. */
@@ -95,6 +96,26 @@ export function changedIds(now: Drafts, kind: ItemKind): string[] {
   return list(now.show, kind)
     .filter((i) => saved.get(i.id) !== i)
     .map((i) => i.id)
+}
+
+/**
+ * Fixtures that were put into a group or taken out of one, and that is not saved yet; and the
+ * groups where that happened. With `only`, just what concerns these fixtures.
+ */
+export function regrouped(now: Drafts, only?: string[]): { fixtures: string[]; groups: string[] } {
+  if (now.show.groups === now.saved.groups) return { fixtures: NONE, groups: NONE }
+  const saved = new Map(now.saved.groups.map((g) => [g.id, g]))
+  const fixtures = new Set<string>()
+  const groups: string[] = []
+  for (const g of now.show.groups) {
+    const before = saved.get(g.id)
+    if (!before || before === g) continue
+    const moved = [...g.fixtureIds.filter((id) => !before.fixtureIds.includes(id)), ...before.fixtureIds.filter((id) => !g.fixtureIds.includes(id))].filter((id) => !only || only.includes(id))
+    if (moved.length === 0) continue
+    groups.push(g.id)
+    for (const id of moved) fixtures.add(id)
+  }
+  return { fixtures: [...fixtures], groups }
 }
 
 /** Everything with unsaved changes, list by list. */

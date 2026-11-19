@@ -43,8 +43,10 @@ unicast Art-Net is blocked by the system.
 - **Effects**: build your own effects. Draw a curve and let it drive brightness or colour (through a gradient),
   over time or along the pixels, in seconds or in beats of the MIDI clock. Own effects appear next to the built-in
   ones in every layer.
-- **Chasers**: run scenes one after the other in tempo (beats and bpm), started by a MIDI note. A chaser can follow
-  the MIDI clock of the DAW instead of a fixed tempo; switch on sending clock for the HeavyLight output there.
+- **Chasers**: scenes linked in time as a flow chart below the stage, started by a MIDI note. Nodes are scenes or
+  waits with a length (note value); arrows say what comes next. Several arrows start several nodes at once or one at
+  random, an arrow back makes a loop. Runs at its own tempo or along the MIDI clock, with a speed factor and
+  crossfades. Drag from the dot of a node onto another node to link them; Delete removes nodes and arrows.
 - **Live**: pads for every scene, master, blackout, MIDI monitor and timing measurements.
 
 On macOS and Linux the app opens a virtual MIDI port named `HeavyLight`; pick it as MIDI output

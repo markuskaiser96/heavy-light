@@ -213,6 +213,11 @@ const NOTE_VALUES: { beats: number; label: string }[] = [
   { beats: 0.125, label: '1/32' }
 ]
 
+/** A length in beats as its note value, e.g. "1/8T", or in beats if it is none. */
+export function beatLabel(beats: number): string {
+  return NOTE_VALUES.find((n) => Math.abs(n.beats - beats) < 1e-3)?.label ?? `${+beats.toFixed(3)} beats`
+}
+
 /**
  * A length in beats, chosen as a note value (1/4, 1/8T, 1 bar …) or typed in beats. Wherever
  * something runs in the tempo of the song.

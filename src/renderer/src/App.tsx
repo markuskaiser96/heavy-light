@@ -2,6 +2,7 @@ import { X } from 'lucide-react'
 import { useEffect } from 'react'
 import { ChaserEditor, ChaserList } from './components/ChaserPanels'
 import { EffectEditor, EffectList } from './components/EffectPanels'
+import { FlowGraph } from './components/FlowGraph'
 import { LookPads, SignalPanel } from './components/LivePanels'
 import { LookEditor, LookList } from './components/LookPanels'
 import { MidiTable } from './components/MidiPanels'
@@ -9,7 +10,7 @@ import { Resizer } from './components/Resizer'
 import { Stage3D } from './components/Stage3D'
 import { FixtureInspector, FixtureList } from './components/StagePanels'
 import { TopBar } from './components/TopBar'
-import { editChaser, editing, editLook, frame, loadInitialShow, saveShow, unsaved, useStore, VIEW_OF, type ItemKind } from './store'
+import { editChaser, editing, editLook, frame, loadInitialShow, regrouped, saveShow, unsaved, useStore, VIEW_OF, type ItemKind } from './store'
 
 /** Connects the store to the engine process. Runs once for the lifetime of the window. */
 function connectEngine(): void {
@@ -97,6 +98,7 @@ function showUnsaved({ kind, id }: { kind: ItemKind; id: string }): void {
   else if (kind === 'chasers') s.selectChaser(id)
   else if (kind === 'effects') s.set({ effectId: id })
   else if (kind === 'fixtures') s.selectFixtures([id])
+  else if (kind === 'groups') s.selectFixtures(regrouped(s).fixtures)
   else s.selectProps([id])
 }
 
@@ -161,6 +163,7 @@ export function App() {
           <Stage3D />
           {view === 'live' && <LookPads />}
           {view === 'midi' && <MidiTable />}
+          {view === 'chasers' && <FlowGraph />}
         </div>
         <Resizer panel={view === 'looks' || view === 'chasers' || view === 'effects' ? 'rightWide' : 'right'} />
         {view === 'stage' && <FixtureInspector />}

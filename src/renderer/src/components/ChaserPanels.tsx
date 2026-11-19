@@ -1,20 +1,13 @@
-import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, ListPlus, Plus, Trash2 } from 'lucide-react'
-import { useRef, useState } from 'react'
-import { LOOK_COLORS, newChaser, newId, newStep } from '@shared/show'
-import type { Chaser, ChaserOrder, ChaserStep } from '@shared/types'
+import { Copy, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
+import { useRef } from 'react'
+import { nextOf, removeNodes } from '@shared/flow'
+import { LOOK_COLORS, newChaser, newId } from '@shared/show'
+import type { Chaser, FlowNode } from '@shared/types'
 import { editChaser, useStore } from '../store'
-import { AddStepsDialog } from './AddStepsDialog'
 import { ItemList, folderIn } from './ItemList'
 import { midiLabel, TriggerEditor } from './LookPanels'
 import { SaveBar } from './SaveBar'
-import { BeatLength, Field, NumberInput, Section, Segmented, Select, Slider, TextInput, Toggle } from './ui'
-
-const ORDERS: { value: ChaserOrder; label: string }[] = [
-  { value: 'forward', label: 'First to last' },
-  { value: 'backward', label: 'Last to first' },
-  { value: 'pingpong', label: 'Back and forth' },
-  { value: 'random', label: 'Random' }
-]
+import { BeatLength, Field, NumberInput, Section, Segmented, Select, Slider, TextInput } from './ui'
 
 /** Factors on the tempo: the steps keep their lengths, the chaser runs through them faster or slower. */
 const SPEEDS: { value: string; label: string }[] = [
@@ -55,7 +48,7 @@ export function ChaserList() {
         matches={(c, query) => midiLabel(c).toLowerCase().includes(query)}
         lead={(c) => <span className="look-chip" style={{ background: c.color, opacity: 0.35 + 0.65 * Math.min(1, (running?.find((r) => r.chaserId === c.id)?.level ?? 0) * 2) }} />}
         meta={midiLabel}
-        empty="A chaser runs through several scenes in tempo, for as long as its MIDI note is held."
+        empty="A chaser links scenes in time, as a flow chart: one after the other, side by side, in loops. It runs in tempo for as long as its MIDI note is held."
         action={
           <button className="button small primary" onClick={add}>
             <Plus size={14} /> New chaser
@@ -84,83 +77,90 @@ function TapTempo({ onTempo }: { onTempo: (bpm: number) => void }) {
   )
 }
 
-function Steps({ chaser, current, bpm }: { chaser: Chaser; current: number | null; bpm: number }) {
+/** Settings of the nodes selected in the flow chart. */
+function NodeEditor({ chaser }: { chaser: Chaser }) {
   const looks = useStore((s) => s.show.looks)
-  const [picking, setPicking] = useState(false)
-  const setSteps = (steps: ChaserStep[]) => editChaser(chaser.id, { steps })
-  const beats = chaser.steps.reduce((sum, step) => sum + step.beats, 0)
-  const speed = chaser.speed > 0 ? chaser.speed : 1
-  const seconds = (beats * 60) / Math.max(1, bpm) / speed
-  const options = [{ value: '', label: 'Dark' }, ...looks.map((l) => ({ value: l.id, label: l.name }))]
+  const selected = useStore((s) => s.flowNodes)
+  const set = useStore((s) => s.set)
+  const nodes = chaser.nodes.filter((n) => selected.includes(n.id))
+  const timed = nodes.filter((n) => n.kind !== 'start')
+  const scenes = nodes.filter((n) => n.kind === 'scene')
+  const ids = new Set(nodes.map((n) => n.id))
+  const change = (patch: Partial<FlowNode>, key?: string) =>
+    editChaser(chaser.id, { nodes: chaser.nodes.map((n) => (ids.has(n.id) && (n.kind !== 'start' || 'next' in patch) ? { ...n, ...patch, kind: n.kind, id: n.id } : n)) }, key && `${key}-${[...ids].join()}`)
 
-  const add = () => {
-    // Offer the look after the one in the last step: building a run through the looks takes one click per step.
-    const last = looks.findIndex((l) => l.id === chaser.steps.at(-1)?.lookId)
-    const look = looks[(last + 1) % Math.max(1, looks.length)]
-    setSteps([...chaser.steps, newStep(look?.id ?? '', chaser.steps.at(-1)?.beats ?? 1)])
+  if (nodes.length === 0) {
+    return (
+      <Section title="Node">
+        <p className="empty">
+          {chaser.nodes.length === 1
+            ? 'Add scenes in the chart below the stage. They start with the MIDI note and follow each other in tempo.'
+            : 'Click a node in the chart below the stage to set its scene and length.'}
+        </p>
+      </Section>
+    )
   }
+
+  const first = nodes[0]
+  const same = <K extends keyof FlowNode>(list: FlowNode[], key: K): FlowNode[K] | undefined => (list.every((n) => n[key] === list[0][key]) ? list[0]?.[key] : undefined)
+  const outs = Math.max(...nodes.map((n) => nextOf(chaser, n.id).length))
+  const title = nodes.length > 1 ? `${nodes.length} nodes` : first.kind === 'start' ? 'Start' : first.kind === 'wait' ? 'Wait' : 'Scene node'
 
   return (
     <Section
-      title="Steps"
+      title={title}
       action={
-        <span className="actions">
-          <button className="button small ghost" title="Add one step" onClick={add}>
-            <Plus size={14} /> Step
+        timed.length > 0 && (
+          <button
+            className="icon"
+            title={nodes.length > 1 ? 'Delete these nodes' : 'Delete node'}
+            onClick={() => {
+              editChaser(chaser.id, removeNodes(chaser, [...ids]))
+              set({ flowNodes: [] })
+            }}
+          >
+            <Trash2 size={15} />
           </button>
-          <button className="button small ghost" title="Search the scenes and add many of them as steps at once" disabled={looks.length === 0} onClick={() => setPicking(true)}>
-            <ListPlus size={14} /> Scenes…
-          </button>
-        </span>
+        )
       }
     >
-      {picking && (
-        <AddStepsDialog
-          beats={chaser.steps.at(-1)?.beats ?? 1}
-          onClose={() => setPicking(false)}
-          onAdd={(ids, length) => setSteps([...chaser.steps, ...ids.map((id) => newStep(id, length))])}
-        />
-      )}
-      {chaser.steps.length === 0 && (
-        <p className="empty">{looks.length ? 'Add steps and choose the scene each one shows, or pick many scenes at once with “Scenes…”.' : 'A chaser plays scenes. Build some in the Scenes tab first.'}</p>
-      )}
-      <ol className="steps">
-        {chaser.steps.map((step, index) => {
-          const swap = (j: number) => {
-            const steps = [...chaser.steps]
-            ;[steps[index], steps[j]] = [steps[j], steps[index]]
-            setSteps(steps)
-          }
-          const set = (patch: Partial<ChaserStep>, key?: string) =>
-            editChaser(chaser.id, { steps: chaser.steps.map((x) => (x.id === step.id ? { ...x, ...patch } : x)) }, key && `${key}-${step.id}`)
-          const look = looks.find((l) => l.id === step.lookId)
-          return (
-            <li key={step.id} className={`step${index === current ? ' playing' : ''}`}>
-              <span className="step-number">{index + 1}</span>
-              <span className="look-chip" style={{ background: look?.color ?? 'var(--raised-2)' }} />
-              <Select value={look ? step.lookId : ''} onChange={(lookId) => set({ lookId })} options={options} />
-              <span className="step-beats" title="Length of this step in beats">
-                <BeatLength value={step.beats} min={1 / 8} onChange={(beats) => set({ beats }, 'beats')} />
-              </span>
-              <button className="icon subtle" title="Move up" disabled={index === 0} onClick={() => swap(index - 1)}>
-                <ArrowUp size={13} />
-              </button>
-              <button className="icon subtle" title="Move down" disabled={index === chaser.steps.length - 1} onClick={() => swap(index + 1)}>
-                <ArrowDown size={13} />
-              </button>
-              <button className="icon subtle" title="Delete step" onClick={() => setSteps(chaser.steps.filter((x) => x.id !== step.id))}>
-                <Trash2 size={13} />
-              </button>
-            </li>
-          )
-        })}
-      </ol>
-      {chaser.steps.length > 0 && (
-        <p className="summary">
-          One pass is {+(beats / speed).toFixed(2)} beat{beats / speed === 1 ? '' : 's'}, or {seconds.toFixed(2)} s at {+bpm.toFixed(1)} bpm.
-          {speed !== 1 && ` The step lengths are played ${SPEEDS.find((x) => x.value === String(speed))?.label ?? `×${speed}`}.`}
-        </p>
-      )}
+      <div className="form-grid">
+        {scenes.length > 0 && scenes.length === nodes.length && (
+          <Field label="Scene" wide>
+            <Select
+              value={same(scenes, 'lookId') ?? '?'}
+              onChange={(lookId) => lookId !== '?' && change({ lookId })}
+              options={[...(same(scenes, 'lookId') === undefined ? [{ value: '?', label: 'Different scenes' }] : []), { value: '', label: 'Dark' }, ...looks.map((l) => ({ value: l.id, label: l.name }))]}
+            />
+          </Field>
+        )}
+        {timed.length > 0 && (
+          <Field label={first.kind === 'wait' && nodes.length === 1 ? 'Waits for' : 'Lasts'} wide>
+            <BeatLength value={same(timed, 'beats') ?? timed[0].beats} min={1 / 16} onChange={(beats) => change({ beats }, 'beats')} />
+          </Field>
+        )}
+        <Field label="When it is over" wide>
+          <Segmented
+            value={same(nodes, 'next') ?? 'all'}
+            onChange={(next) => change({ next })}
+            options={[
+              { value: 'all', label: 'Start all that follow' },
+              { value: 'one', label: 'Start one at random' }
+            ]}
+          />
+        </Field>
+      </div>
+      <p className="summary">
+        {first.kind === 'start' && nodes.length === 1
+          ? 'The flow begins here the moment the MIDI note arrives. Everything this node points to starts on that beat.'
+          : outs === 0
+            ? 'Nothing follows: the flow ends here. Drag from the dot on its right onto another node to carry on, or back onto an earlier one to loop.'
+            : outs === 1
+              ? 'One node follows. Add more arrows to start several things at once, or to choose between them at random.'
+              : (same(nodes, 'next') ?? 'all') === 'all'
+                ? `Its ${outs} arrows all start together.`
+                : `One of its ${outs} arrows is taken each time, never the one it just came from.`}
+      </p>
     </Section>
   )
 }
@@ -184,7 +184,6 @@ export function ChaserEditor() {
   const change = (patch: Partial<Chaser>, key?: string) => editChaser(chaser.id, patch, key && `${key}-${chaser.id}`)
   const clock = status?.clock ?? null
   const following = chaser.tempo === 'midi'
-  const current = preview ? (status?.previewStep ?? null) : (status?.chasers.find((r) => r.chaserId === chaser.id)?.step ?? null)
 
   return (
     <aside className="panel right wide">
@@ -199,7 +198,7 @@ export function ChaserEditor() {
               className="icon"
               title="Duplicate chaser"
               onClick={() => {
-                const copy: Chaser = { ...chaser, id: newId(), name: `${chaser.name} copy`, midi: null, steps: chaser.steps.map((step) => ({ ...step, id: newId() })) }
+                const copy: Chaser = { ...structuredClone(chaser), id: newId(), name: `${chaser.name} copy`, midi: null }
                 editNow((s) => ({ ...s, chasers: [...s.chasers, copy] }))
                 selectChaser(copy.id)
               }}
@@ -259,18 +258,14 @@ export function ChaserEditor() {
         </div>
         <p className="summary">
           {following
-            ? 'Steps are counted in the clock ticks of the DAW, so the chaser follows every tempo change of the song. It still starts on its first step the moment its note arrives. Switch on sending MIDI clock for the HeavyLight output in the DAW; while none arrives, the tempo above is used.'
-            : 'Use the tempo of the song in Reaper. The chaser starts on its first step the moment its note arrives, so it stays on the beat.'}
+            ? 'Lengths are counted in the clock ticks of the DAW, so the chaser follows every tempo change of the song. It still starts the moment its note arrives. Switch on sending MIDI clock for the HeavyLight output in the DAW; while none arrives, the tempo above is used.'
+            : 'Use the tempo of the song in Reaper. The chaser starts the moment its note arrives, so it stays on the beat.'}
         </p>
         <div className="form-grid">
           <Field label="Speed" wide>
             <Segmented value={String(chaser.speed > 0 ? chaser.speed : 1)} onChange={(v) => change({ speed: Number(v) })} options={SPEEDS} />
           </Field>
-          <Field label="Order" wide>
-            <Select value={chaser.order} onChange={(order) => change({ order })} options={ORDERS} />
-          </Field>
-          <Toggle value={chaser.loop} onChange={(loop) => change({ loop })} label={chaser.loop ? 'Repeats until it is stopped' : 'Plays once, then stops'} />
-          <Field label="Fade between steps" wide>
+          <Field label="Fade between scenes" wide>
             <Slider
               value={chaser.crossfade}
               min={0}
@@ -283,7 +278,7 @@ export function ChaserEditor() {
         </div>
       </Section>
 
-      <Steps chaser={chaser} current={current} bpm={following && clock ? clock.bpm : chaser.bpm} />
+      <NodeEditor chaser={chaser} />
 
       <TriggerEditor item={chaser} onEdit={(patch, key) => editChaser(chaser.id, patch, key)} />
 

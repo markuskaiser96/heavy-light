@@ -26,7 +26,7 @@ export function LookPads() {
                     <span className="pad-beam" />
                     <span className="pad-name">{c.name}</span>
                     <span className="pad-note">
-                      {run ? `Step ${run.step + 1} of ${c.steps.length}` : `${c.midi ? noteName(c.midi.note) : 'No note'}, ${c.bpm} bpm`}
+                      {run ? 'Playing' : `${c.midi ? noteName(c.midi.note) : 'No note'}, ${c.bpm} bpm`}
                     </span>
                   </button>
                 )
