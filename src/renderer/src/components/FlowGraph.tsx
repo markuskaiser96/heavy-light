@@ -1,6 +1,6 @@
-import { Hourglass, ListPlus, Maximize2, Play, Plus, Shuffle } from 'lucide-react'
+import { Hourglass, LayoutGrid, ListPlus, Maximize2, Play, Plus, Shuffle } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { appendChain, link, newNode, nextOf, NODE_GAP, NODE_H, NODE_W, removeNodes, START } from '@shared/flow'
+import { appendChain, link, newNode, nextOf, NODE_GAP, NODE_H, nodeWidth, removeNodes, ROW_GAP, START, tidy, type NameOf } from '@shared/flow'
 import type { Chaser, FlowLink, FlowNode } from '@shared/types'
 import { editChaser, useStore } from '../store'
 import { AddStepsDialog } from './AddStepsDialog'
@@ -10,9 +10,8 @@ const GRID = 12
 const snap = (v: number): number => Math.round(v / GRID) * GRID
 
 /** Where an arrow leaves a node and where it arrives. */
-const outOf = (n: FlowNode): [number, number] => [n.x + (n.kind === 'start' ? START_W : NODE_W), n.y + NODE_H / 2]
+const outOf = (n: FlowNode, nameOf: NameOf): [number, number] => [n.x + nodeWidth(n, nameOf), n.y + NODE_H / 2]
 const into = (n: FlowNode): [number, number] => [n.x, n.y + NODE_H / 2]
-const START_W = 96
 
 /** The line of an arrow. One that leads back (a loop) swings out below the nodes so it does not run through them. */
 function arrowPath([x1, y1]: [number, number], [x2, y2]: [number, number]): string {
@@ -33,10 +32,10 @@ function anchor(chaser: Chaser, selected: string[]): FlowNode {
 }
 
 /** A free spot to the right of `after`: further down if something is already there. */
-function spotAfter(chaser: Chaser, after: FlowNode): { x: number; y: number } {
-  const x = after.x + NODE_GAP
+function spotAfter(chaser: Chaser, after: FlowNode, width: number, nameOf: NameOf): { x: number; y: number } {
+  const x = after.x + nodeWidth(after, nameOf) + NODE_GAP
   let y = after.y
-  while (chaser.nodes.some((n) => Math.abs(n.x - x) < NODE_W && Math.abs(n.y - y) < NODE_H + 8)) y += NODE_H + 24
+  while (chaser.nodes.some((n) => n.x < x + width && x < n.x + nodeWidth(n, nameOf) && Math.abs(n.y - y) < NODE_H + 8)) y += NODE_H + ROW_GAP
   return { x, y }
 }
 
@@ -59,6 +58,7 @@ export function FlowGraph() {
   const box = useRef<HTMLDivElement>(null)
   const drag = useRef<{ kind: 'pan' | 'nodes'; x: number; y: number; moved: boolean; start: Map<string, { x: number; y: number }> } | null>(null)
   const chaserId = chaser?.id
+  const nameOf: NameOf = (lookId) => looks.find((l) => l.id === lookId)?.name
 
   const select = (ids: string[]) => {
     set({ flowNodes: ids })
@@ -69,7 +69,7 @@ export function FlowGraph() {
   const fit = () => {
     const el = box.current
     if (!el || !chaser) return
-    const xs = chaser.nodes.flatMap((n) => [n.x, n.x + NODE_W])
+    const xs = chaser.nodes.flatMap((n) => [n.x, n.x + nodeWidth(n, nameOf)])
     const ys = chaser.nodes.flatMap((n) => [n.y, n.y + NODE_H])
     const w = Math.max(...xs) - Math.min(...xs)
     const h = Math.max(...ys) - Math.min(...ys)
@@ -83,6 +83,12 @@ export function FlowGraph() {
     select([])
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chaserId])
+  // After tidying up, once the nodes are where they now belong.
+  const [refit, setRefit] = useState(0)
+  useLayoutEffect(() => {
+    if (refit) fit()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refit])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -129,10 +135,11 @@ export function FlowGraph() {
 
   const add = (kind: 'scene' | 'wait') => {
     const after = anchor(chaser, selected)
-    const { x, y } = spotAfter(chaser, after)
     // Offer the scene after the one before: building a run through the scenes takes one click per node.
     const last = looks.findIndex((l) => l.id === after.lookId)
-    const node = newNode(kind, kind === 'scene' ? (looks[(last + 1) % Math.max(1, looks.length)]?.id ?? '') : '', after.kind === 'start' ? 1 : after.beats, x, y)
+    const lookId = kind === 'scene' ? (looks[(last + 1) % Math.max(1, looks.length)]?.id ?? '') : ''
+    const { x, y } = spotAfter(chaser, after, nodeWidth({ kind, lookId }, nameOf), nameOf)
+    const node = newNode(kind, lookId, after.kind === 'start' ? 1 : after.beats, x, y)
     editChaser(chaser.id, link({ nodes: [...chaser.nodes, node], links: chaser.links }, after.id, node.id))
     select([node.id])
   }
@@ -224,6 +231,17 @@ export function FlowGraph() {
         <button className="button small ghost" title="Search the scenes and add many of them in a row" disabled={looks.length === 0} onClick={() => setPicking(true)}>
           <ListPlus size={14} /> Scenes…
         </button>
+        <button
+          className="icon"
+          title="Tidy up: lay the nodes out again, from the start to the right"
+          disabled={empty}
+          onClick={() => {
+            editChaser(chaser.id, tidy(chaser, nameOf))
+            setRefit((n) => n + 1)
+          }}
+        >
+          <LayoutGrid size={14} />
+        </button>
         <button className="icon" title="Show the whole flow" onClick={fit}>
           <Maximize2 size={14} />
         </button>
@@ -249,7 +267,7 @@ export function FlowGraph() {
               const a = byId.get(l.from)
               const b = byId.get(l.to)
               if (!a || !b) return null
-              const d = arrowPath(outOf(a), into(b))
+              const d = arrowPath(outOf(a, nameOf), into(b))
               const on = pickedLink?.from === l.from && pickedLink.to === l.to
               return (
                 <g key={`${l.from}>${l.to}`} className={`flow-link${on ? ' on' : ''}`}>
@@ -267,7 +285,7 @@ export function FlowGraph() {
                 </g>
               )
             })}
-            {drawing && byId.get(drawing.from) && <path className="flow-draft" d={arrowPath(outOf(byId.get(drawing.from)!), drawing.over && byId.get(drawing.over) ? into(byId.get(drawing.over)!) : [drawing.x, drawing.y])} markerEnd="url(#flow-arrow-on)" />}
+            {drawing && byId.get(drawing.from) && <path className="flow-draft" d={arrowPath(outOf(byId.get(drawing.from)!, nameOf), drawing.over && byId.get(drawing.over) ? into(byId.get(drawing.over)!) : [drawing.x, drawing.y])} markerEnd="url(#flow-arrow-on)" />}
           </svg>
 
           {chaser.nodes.map((n) => {
@@ -275,7 +293,7 @@ export function FlowGraph() {
             const outs = nextOf(chaser, n.id).length
             const classes = `flow-node ${n.kind}${selected.includes(n.id) ? ' on' : ''}${playing.includes(n.id) ? ' playing' : ''}${drawing?.over === n.id ? ' target' : ''}`
             return (
-              <div key={n.id} data-node={n.id} className={classes} style={{ left: n.x, top: n.y, width: n.kind === 'start' ? START_W : NODE_W, height: NODE_H, '--look': look?.color ?? 'var(--raised-2)' } as React.CSSProperties}>
+              <div key={n.id} data-node={n.id} className={classes} style={{ left: n.x, top: n.y, width: nodeWidth(n, nameOf), height: NODE_H, '--look': look?.color ?? 'var(--raised-2)' } as React.CSSProperties}>
                 {n.kind === 'start' ? (
                   <>
                     <Play size={13} />
@@ -308,7 +326,7 @@ export function FlowGraph() {
           beats={anchor(chaser, selected).kind === 'start' ? 1 : anchor(chaser, selected).beats}
           onClose={() => setPicking(false)}
           onAdd={(ids, beats) => {
-            const { graph, added } = appendChain(chaser, anchor(chaser, selected).id, ids, beats)
+            const { graph, added } = appendChain(chaser, anchor(chaser, selected).id, ids, beats, nameOf)
             editChaser(chaser.id, graph)
             select(added)
           }}

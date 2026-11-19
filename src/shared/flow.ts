@@ -15,10 +15,27 @@ export const START = 'start'
 /** Shortest node in beats. Keeps a loop of tiny nodes from spinning forever within one frame. */
 export const MIN_BEATS = 0.01
 
-export const NODE_W = 168
+/** Narrowest and widest a node is drawn. In between it is as wide as its name needs. */
+export const NODE_W = 124
+export const NODE_W_MAX = 460
 export const NODE_H = 52
-/** Distance between neighbours when nodes are laid out in a row. */
-export const NODE_GAP = 216
+export const START_W = 96
+/** Room between neighbours when nodes are laid out: side by side, and one below the other. */
+export const NODE_GAP = 52
+export const ROW_GAP = 24
+
+/** What a node shows as its name. */
+export type NameOf = (lookId: string) => string | undefined
+
+/**
+ * How wide a node is drawn so that its whole name fits. Estimated from the number of letters, so
+ * that laying out a flow needs no screen to measure on.
+ */
+export function nodeWidth(node: Pick<FlowNode, 'kind' | 'lookId'>, nameOf?: NameOf): number {
+  if (node.kind === 'start') return START_W
+  const name = node.kind === 'wait' ? 'Wait' : ((node.lookId && nameOf?.(node.lookId)) ?? 'Dark')
+  return Math.min(NODE_W_MAX, Math.max(NODE_W, Math.ceil(40 + name.length * 7.7)))
+}
 
 const newId = (): string => Math.random().toString(36).slice(2, 10)
 
@@ -54,14 +71,59 @@ export function removeNodes(graph: Graph, ids: string[]): Graph {
  * Adds scenes one after the other, behind `after`. Returns the new graph and the ids of the new
  * nodes. They are placed in a row to the right of `after`, below what is already there.
  */
-export function appendChain(graph: Graph, after: string, lookIds: string[], beats: number): { graph: Graph; added: string[] } {
+export function appendChain(graph: Graph, after: string, lookIds: string[], beats: number, nameOf?: NameOf): { graph: Graph; added: string[] } {
   const from = graph.nodes.find((n) => n.id === after) ?? graph.nodes.find((n) => n.id === START)!
   // Free row: the row of `from` if nothing sits to its right there, else below everything.
   const taken = graph.nodes.some((n) => n.id !== from.id && n.x > from.x && Math.abs(n.y - from.y) < NODE_H + 8)
-  const y = taken ? Math.max(...graph.nodes.map((n) => n.y)) + NODE_H + 36 : from.y
-  const nodes = lookIds.map((lookId, i) => newNode('scene', lookId, beats, from.x + NODE_GAP * (i + 1), y))
+  const y = taken ? Math.max(...graph.nodes.map((n) => n.y)) + NODE_H + ROW_GAP + 12 : from.y
+  let x = from.x + nodeWidth(from, nameOf) + NODE_GAP
+  const nodes = lookIds.map((lookId) => {
+    const node = newNode('scene', lookId, beats, x, y)
+    x += nodeWidth(node, nameOf) + NODE_GAP
+    return node
+  })
   const links: FlowLink[] = nodes.map((n, i) => ({ from: i === 0 ? from.id : nodes[i - 1].id, to: n.id }))
   return { graph: { nodes: [...graph.nodes, ...nodes], links: [...graph.links, ...links] }, added: nodes.map((n) => n.id) }
+}
+
+/**
+ * Lays a flow out afresh: from the start to the right, every node one column behind the node that
+ * first leads to it, nodes of a column below each other. Arrows back simply run back.
+ */
+export function tidy(graph: Graph, nameOf?: NameOf): Graph {
+  const depth = new Map<string, number>([[START, 0]])
+  const queue = [START]
+  while (queue.length > 0) {
+    const id = queue.shift()!
+    for (const to of nextOf(graph, id)) {
+      if (depth.has(to)) continue
+      depth.set(to, depth.get(id)! + 1)
+      queue.push(to)
+    }
+  }
+  // What nothing leads to goes into a row of its own below, in the order it was in.
+  const columns: FlowNode[][] = []
+  const loose: FlowNode[] = []
+  for (const n of [...graph.nodes].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    const d = depth.get(n.id)
+    if (d === undefined) loose.push(n)
+    else (columns[d] ??= []).push(n)
+  }
+  const placed = new Map<string, { x: number; y: number }>()
+  const tallest = Math.max(1, ...columns.map((c) => c?.length ?? 0))
+  let x = 0
+  for (const column of columns) {
+    if (!column) continue
+    column.forEach((n, i) => placed.set(n.id, { x, y: Math.round((i - (column.length - 1) / 2) * (NODE_H + ROW_GAP)) }))
+    x += Math.max(...column.map((n) => nodeWidth(n, nameOf))) + NODE_GAP
+  }
+  let lx = 0
+  const ly = Math.round(((tallest - 1) / 2 + 1.5) * (NODE_H + ROW_GAP))
+  for (const n of loose) {
+    placed.set(n.id, { x: lx, y: ly })
+    lx += nodeWidth(n, nameOf) + NODE_GAP
+  }
+  return { nodes: graph.nodes.map((n) => ({ ...n, ...placed.get(n.id)! })), links: graph.links }
 }
 
 /** The steps of a chaser as it was before flows: a list played in some order, looping or not. */
@@ -72,33 +134,33 @@ export interface OldSteps {
 }
 
 /** Turns a list of steps into the flow that plays the same. */
-export function flowFromSteps({ steps = [], order = 'forward', loop = true }: OldSteps): Graph {
+export function flowFromSteps({ steps = [], order = 'forward', loop = true }: OldSteps, nameOf?: NameOf): Graph {
   const start = startNode()
-  const row = (list: { lookId: string; beats: number }[], y: number) => list.map((s, i) => newNode('scene', s.lookId, s.beats, NODE_GAP * (i + 1), y))
+  const row = (list: { lookId: string; beats: number }[]) => list.map((s) => newNode('scene', s.lookId, s.beats, 0, 0))
   if (steps.length === 0) return { nodes: [start], links: [] }
 
   if (order === 'random') {
     // Start draws one of the scenes; each one leads back to start, which draws again.
-    const nodes = steps.map((s, i) => newNode('scene', s.lookId, s.beats, NODE_GAP, (i - (steps.length - 1) / 2) * (NODE_H + 20)))
+    const nodes = row(steps)
     const links = nodes.flatMap((n) => [{ from: START, to: n.id }, ...(loop ? [{ from: n.id, to: START }] : [])])
-    return { nodes: [{ ...start, next: 'one' }, ...nodes], links }
+    return tidy({ nodes: [{ ...start, next: 'one' }, ...nodes], links }, nameOf)
   }
 
   const list = order === 'backward' ? [...steps].reverse() : order === 'pingpong' && steps.length > 2 ? [...steps, ...steps.slice(1, -1).reverse()] : steps
-  const nodes = row(list, 0)
+  const nodes = row(list)
   const links: FlowLink[] = nodes.map((n, i) => ({ from: i === 0 ? START : nodes[i - 1].id, to: n.id }))
   // Back and forth without a loop still comes back to where it began.
   if (order === 'pingpong' && !loop && steps.length > 1) {
-    const back = newNode('scene', steps[0].lookId, steps[0].beats, NODE_GAP * (nodes.length + 1), 0)
-    return { nodes: [start, ...nodes, back], links: [...links, { from: nodes.at(-1)!.id, to: back.id }] }
+    const back = newNode('scene', steps[0].lookId, steps[0].beats, 0, 0)
+    return tidy({ nodes: [start, ...nodes, back], links: [...links, { from: nodes.at(-1)!.id, to: back.id }] }, nameOf)
   }
   if (loop) links.push({ from: nodes.at(-1)!.id, to: nodes[0].id })
-  return { nodes: [start, ...nodes], links }
+  return tidy({ nodes: [start, ...nodes], links }, nameOf)
 }
 
 /** Fills in what a file lacks, and makes sure there is exactly one start. */
-export function normalizeFlow(raw: Partial<Graph> & OldSteps): Graph {
-  if (!Array.isArray(raw.nodes)) return flowFromSteps(raw)
+export function normalizeFlow(raw: Partial<Graph> & OldSteps, nameOf?: NameOf): Graph {
+  if (!Array.isArray(raw.nodes)) return flowFromSteps(raw, nameOf)
   const nodes: FlowNode[] = raw.nodes
     .filter((n) => typeof n?.id === 'string' && n.id !== START)
     .map((n) => ({

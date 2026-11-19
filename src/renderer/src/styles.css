@@ -2435,3 +2435,8 @@ input[type='range']::-webkit-slider-thumb {
   border-style: dashed;
   color: var(--text);
 }
+
+.flow-tools .icon:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}

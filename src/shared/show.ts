@@ -125,7 +125,7 @@ export function normalizeShow(value: unknown): Show {
     chasers: (raw.chasers ?? []).map((c, i) => {
       // Chasers saved as a list of steps become the flow that plays the same.
       const { steps: _steps, order: _order, loop: _loop, ...rest } = c as Chaser & OldSteps
-      return { ...newChaser(c.name ?? 'Flow', i), ...rest, ...normalizeFlow(c as Chaser & OldSteps) }
+      return { ...newChaser(c.name ?? 'Flow', i), ...rest, ...normalizeFlow(c as Chaser & OldSteps, (id) => raw.looks?.find((l) => l.id === id)?.name) }
     }),
     stage: { ...base.stage, ...raw.stage },
     settings: { ...base.settings, ...raw.settings }
@@ -263,7 +263,7 @@ export function demoShow(): Show {
     id: `chaser-${i + 1}`,
     midi: { channel: 0, note },
     ...patch,
-    ...flowFromSteps({ steps: steps.map(([n, beats]) => ({ lookId: `look-${n}`, beats })) })
+    ...flowFromSteps({ steps: steps.map(([n, beats]) => ({ lookId: `look-${n}`, beats })) }, (id) => show.looks.find((l) => l.id === id)?.name)
   })
   show.chasers = [
     chaser(0, 'Colour walk', 48, { bpm: 120, crossfade: 0.5, fadeOut: 600 }, [[1, 2], [2, 2], [6, 2], [3, 2]]),
