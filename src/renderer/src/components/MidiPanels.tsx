@@ -60,7 +60,7 @@ export function MidiTable() {
       <div className="midi-tools">
         <div className="search">
           <Search size={14} />
-          <input className="input" value={search} placeholder="Search name, folder or note" spellCheck={false} aria-label="Search scenes and chasers" onChange={(e) => setSearch(e.target.value)} />
+          <input className="input" value={search} placeholder="Search name, folder or note" spellCheck={false} aria-label="Search scenes and flows" onChange={(e) => setSearch(e.target.value)} />
           {search && (
             <button className="icon subtle shown" title="Clear search" onClick={() => setSearch('')}>
               <X size={13} />
@@ -78,12 +78,12 @@ export function MidiTable() {
         <span className="muted midi-count">
           {assigned} of {all.length} have a note
         </span>
-        <button className="button small ghost" disabled={!anyActive} title="Stop every scene and chaser (Esc)" onClick={() => window.heavy.send({ type: 'releaseAll' })}>
+        <button className="button small ghost" disabled={!anyActive} title="Stop every scene and flow (Esc)" onClick={() => window.heavy.send({ type: 'releaseAll' })}>
           Release all
         </button>
       </div>
 
-      {all.length === 0 && <p className="empty">No scenes or chasers yet. Build some, then give them their notes here.</p>}
+      {all.length === 0 && <p className="empty">No scenes or flows yet. Build some, then give them their notes here.</p>}
       {all.length > 0 && rows.length === 0 && <p className="empty">Nothing matches “{search.trim()}”.</p>}
 
       {rows.length > 0 && (
@@ -116,7 +116,7 @@ export function MidiTable() {
                     <span className="midi-name">
                       <span className="look-chip" style={{ background: item.color }} />
                       <span className="row-name">{item.name}</span>
-                      {row.chaser && <span className="badge">Chaser</span>}
+                      {row.chaser && <span className="badge">Flow</span>}
                     </span>
                   </td>
                   <td className="muted">{row.folder}</td>

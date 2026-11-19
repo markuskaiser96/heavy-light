@@ -114,7 +114,7 @@ export function FlowGraph() {
   if (!chaser) {
     return (
       <div className="flow-dock">
-        <p className="hint">Select a chaser on the left, or create a new one.</p>
+        <p className="hint">Select a flow on the left, or create a new one.</p>
       </div>
     )
   }

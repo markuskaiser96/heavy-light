@@ -8,7 +8,7 @@ const VIEWS: { id: View; label: string; hint: string }[] = [
   { id: 'stage', label: 'Stage', hint: 'Fixtures and where they stand' },
   { id: 'looks', label: 'Scenes', hint: 'Build what the lights do' },
   { id: 'effects', label: 'Effects', hint: 'Build your own effects from curves' },
-  { id: 'chasers', label: 'Chasers', hint: 'Run scenes one after the other, in tempo' },
+  { id: 'chasers', label: 'Flows', hint: 'Link scenes in time: one after the other, side by side, in loops' },
   { id: 'midi', label: 'MIDI', hint: 'Which note plays what' },
   { id: 'live', label: 'Live', hint: 'Play the show' }
 ]

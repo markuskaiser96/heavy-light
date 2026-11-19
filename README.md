@@ -28,14 +28,14 @@ unicast Art-Net is blocked by the system.
 - **Scenes**: a scene is one or more layers; each layer puts an effect on some fixtures.
   A MIDI note plays a scene ("Learn from MIDI" assigns it). The list can be searched (name or note, Cmd/Ctrl+F)
   and sorted into folders by drag and drop.
-  The lists of fixtures, effects and chasers have the same search field and folders.
+  The lists of fixtures, effects and flows have the same search field and folders.
 - **Tempo**: lengths that follow the beat are chosen as note values (1/4, 1/8T, 1 bar …, counted in 4/4) or typed in
-  beats. A chaser has a speed factor (×¼ to ×4). A curve of a custom effect can run once per MIDI note instead of looping.
+  beats. A flow has a speed factor (×¼ to ×4). A curve of a custom effect can run once per MIDI note instead of looping.
 - **Random**: a curve over position can jump to a random place on every pass, and a layer can play on randomly drawn
   fixtures instead of all its targets. Both follow the beat, so preview and output always agree.
-- **MIDI tab**: all scenes and chasers in one table with their notes; play them, see what is active, learn or type
+- **MIDI tab**: all scenes and flows in one table with their notes; play them, see what is active, learn or type
   notes in place (applies right away).
-- **Saving edits**: what you change in an editor (a fixture or stage object, a scene, an effect, a chaser) is a
+- **Saving edits**: what you change in an editor (a fixture or stage object, a scene, an effect, a flow) is a
   draft. The 3D stage and the preview show it, but MIDI, the Live view and the show file keep the saved state
   until you press "Save" at the bottom of the editor (Cmd/Ctrl+Enter); "Discard" goes back. Entries with
   unsaved changes carry a dot in their list. Adding, duplicating, deleting, sorting and show settings apply right away.
@@ -43,7 +43,7 @@ unicast Art-Net is blocked by the system.
 - **Effects**: build your own effects. Draw a curve and let it drive brightness or colour (through a gradient),
   over time or along the pixels, in seconds or in beats of the MIDI clock. Own effects appear next to the built-in
   ones in every layer.
-- **Chasers**: scenes linked in time as a flow chart below the stage, started by a MIDI note. Nodes are scenes or
+- **Flows**: scenes linked in time as a flow chart below the stage, started by a MIDI note. Nodes are scenes or
   waits with a length (note value); arrows say what comes next. Several arrows start several nodes at once or one at
   random, an arrow back makes a loop. Runs at its own tempo or along the MIDI clock, with a speed factor and
   crossfades. Drag from the dot of a node onto another node to link them; Delete removes nodes and arrows.

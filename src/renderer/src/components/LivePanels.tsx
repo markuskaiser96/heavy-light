@@ -16,7 +16,7 @@ export function LookPads() {
       <div className="pad-groups">
         {chasers.length > 0 && (
           <>
-            <h3 className="pads-title">Chasers</h3>
+            <h3 className="pads-title">Flows</h3>
             <div className="pads">
               {chasers.map((c) => {
                 const run = running?.find((r) => r.chaserId === c.id)
@@ -50,7 +50,7 @@ export function LookPads() {
           {looks.length === 0 && <p className="empty">No scenes yet. Build some in the Scenes tab, then play them here.</p>}
         </div>
       </div>
-      <button className="button ghost release" disabled={!anyActive} title="Stop every scene and chaser (Esc)" onClick={() => window.heavy.send({ type: 'releaseAll' })}>
+      <button className="button ghost release" disabled={!anyActive} title="Stop every scene and flow (Esc)" onClick={() => window.heavy.send({ type: 'releaseAll' })}>
         Release all
       </button>
     </div>

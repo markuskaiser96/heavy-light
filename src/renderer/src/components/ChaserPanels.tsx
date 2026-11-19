@@ -30,7 +30,7 @@ export function ChaserList() {
     // A new chaser lands next to the one being worked on.
     const current = chasers.find((c) => c.id === chaserId)
     const folder = current ? folderIn(folders, current) : ''
-    const chaser: Chaser = { ...newChaser(`Chaser ${chasers.length + 1}`, chasers.length), ...(folder ? { folder } : {}) }
+    const chaser: Chaser = { ...newChaser(`Flow ${chasers.length + 1}`, chasers.length), ...(folder ? { folder } : {}) }
     editNow((s) => ({ ...s, chasers: [...s.chasers, chaser] }))
     selectChaser(chaser.id)
   }
@@ -40,18 +40,18 @@ export function ChaserList() {
       <ItemList
         kind="chasers"
         folderList="chaserFolders"
-        title="Chasers"
-        noun="chaser"
+        title="Flows"
+        noun="flow"
         items={chasers}
         selected={chaserId ? [chaserId] : []}
         onSelect={(id) => selectChaser(id)}
         matches={(c, query) => midiLabel(c).toLowerCase().includes(query)}
         lead={(c) => <span className="look-chip" style={{ background: c.color, opacity: 0.35 + 0.65 * Math.min(1, (running?.find((r) => r.chaserId === c.id)?.level ?? 0) * 2) }} />}
         meta={midiLabel}
-        empty="A chaser links scenes in time, as a flow chart: one after the other, side by side, in loops. It runs in tempo for as long as its MIDI note is held."
+        empty="A flow links scenes in time, as a chart: one after the other, side by side, in loops. It runs in tempo for as long as its MIDI note is held."
         action={
           <button className="button small primary" onClick={add}>
-            <Plus size={14} /> New chaser
+            <Plus size={14} /> New flow
           </button>
         }
       />
@@ -176,7 +176,7 @@ export function ChaserEditor() {
   if (!chaser) {
     return (
       <aside className="panel right wide">
-        <p className="hint">Select a chaser on the left, or create a new one.</p>
+        <p className="hint">Select a flow on the left, or create a new one.</p>
       </aside>
     )
   }
@@ -188,7 +188,7 @@ export function ChaserEditor() {
   return (
     <aside className="panel right wide">
       <Section
-        title="Chaser"
+        title="Flow"
         action={
           <span className="actions">
             <button className={`icon${preview ? ' active' : ''}`} title={preview ? 'Runs on stage while you edit. Click to stop.' : 'Run on stage while editing'} onClick={() => set({ preview: !preview })}>
@@ -196,7 +196,7 @@ export function ChaserEditor() {
             </button>
             <button
               className="icon"
-              title="Duplicate chaser"
+              title="Duplicate flow"
               onClick={() => {
                 const copy: Chaser = { ...structuredClone(chaser), id: newId(), name: `${chaser.name} copy`, midi: null }
                 editNow((s) => ({ ...s, chasers: [...s.chasers, copy] }))
@@ -207,7 +207,7 @@ export function ChaserEditor() {
             </button>
             <button
               className="icon"
-              title="Delete chaser"
+              title="Delete flow"
               onClick={() => {
                 editNow((s) => ({ ...s, chasers: s.chasers.filter((c) => c.id !== chaser.id) }))
                 selectChaser(null)
@@ -258,8 +258,8 @@ export function ChaserEditor() {
         </div>
         <p className="summary">
           {following
-            ? 'Lengths are counted in the clock ticks of the DAW, so the chaser follows every tempo change of the song. It still starts the moment its note arrives. Switch on sending MIDI clock for the HeavyLight output in the DAW; while none arrives, the tempo above is used.'
-            : 'Use the tempo of the song in Reaper. The chaser starts the moment its note arrives, so it stays on the beat.'}
+            ? 'Lengths are counted in the clock ticks of the DAW, so the flow follows every tempo change of the song. It still starts the moment its note arrives. Switch on sending MIDI clock for the HeavyLight output in the DAW; while none arrives, the tempo above is used.'
+            : 'Use the tempo of the song in Reaper. The flow starts the moment its note arrives, so it stays on the beat.'}
         </p>
         <div className="form-grid">
           <Field label="Speed" wide>
@@ -282,7 +282,7 @@ export function ChaserEditor() {
 
       <TriggerEditor item={chaser} onEdit={(patch, key) => editChaser(chaser.id, patch, key)} />
 
-      <SaveBar items={[{ kind: 'chasers', ids: [chaser.id] }]} noun="chaser" />
+      <SaveBar items={[{ kind: 'chasers', ids: [chaser.id] }]} noun="flow" />
     </aside>
   )
 }

@@ -125,7 +125,7 @@ export function normalizeShow(value: unknown): Show {
     chasers: (raw.chasers ?? []).map((c, i) => {
       // Chasers saved as a list of steps become the flow that plays the same.
       const { steps: _steps, order: _order, loop: _loop, ...rest } = c as Chaser & OldSteps
-      return { ...newChaser(c.name ?? 'Chaser', i), ...rest, ...normalizeFlow(c as Chaser & OldSteps) }
+      return { ...newChaser(c.name ?? 'Flow', i), ...rest, ...normalizeFlow(c as Chaser & OldSteps) }
     }),
     stage: { ...base.stage, ...raw.stage },
     settings: { ...base.settings, ...raw.settings }
