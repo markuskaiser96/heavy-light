@@ -1,6 +1,6 @@
 import { Hourglass, LayoutGrid, ListPlus, Maximize2, Play, Plus, Shuffle } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { appendChain, link, newNode, nextOf, NODE_GAP, NODE_H, nodeWidth, removeNodes, ROW_GAP, START, tidy, type NameOf } from '@shared/flow'
+import { addScenes, link, newNode, nextOf, NODE_GAP, NODE_H, nodeWidth, removeNodes, ROW_GAP, START, tidy, type NameOf } from '@shared/flow'
 import type { Chaser, FlowLink, FlowNode } from '@shared/types'
 import { editChaser, useStore } from '../store'
 import { AddStepsDialog } from './AddStepsDialog'
@@ -23,7 +23,7 @@ function arrowPath([x1, y1]: [number, number], [x2, y2]: [number, number]): stri
   return `M${x1} ${y1} C${x1 + 70} ${y1} ${x1 + 70} ${drop} ${x1 - 10} ${drop} L${x2 + 10} ${drop} C${x2 - 70} ${drop} ${x2 - 70} ${y2} ${x2} ${y2}`
 }
 
-/** The node new things are added behind: the selected one, else where the flow ends, else its start. */
+/** The node new things are set down next to: the selected one, else where the flow ends, else its start. */
 function anchor(chaser: Chaser, selected: string[]): FlowNode {
   const chosen = selected.length === 1 ? chaser.nodes.find((n) => n.id === selected[0]) : undefined
   if (chosen) return chosen
@@ -140,7 +140,8 @@ export function FlowGraph() {
     const lookId = kind === 'scene' ? (looks[(last + 1) % Math.max(1, looks.length)]?.id ?? '') : ''
     const { x, y } = spotAfter(chaser, after, nodeWidth({ kind, lookId }, nameOf), nameOf)
     const node = newNode(kind, lookId, after.kind === 'start' ? 1 : after.beats, x, y)
-    editChaser(chaser.id, link({ nodes: [...chaser.nodes, node], links: chaser.links }, after.id, node.id))
+    // Set down next to it, not linked: where it belongs in the flow is for the user to say.
+    editChaser(chaser.id, { nodes: [...chaser.nodes, node] })
     select([node.id])
   }
 
@@ -222,13 +223,13 @@ export function FlowGraph() {
   return (
     <div className="flow-dock">
       <div className="flow-tools">
-        <button className="button small ghost" title="Add a scene behind the selected node, or at the end" onClick={() => add('scene')}>
+        <button className="button small ghost" title="Add a scene node next to the selected one, or at the end. Link it by dragging from the dot of the node before it." onClick={() => add('scene')}>
           <Plus size={14} /> Scene
         </button>
-        <button className="button small ghost" title="Add a wait: time passes, nothing is shown" onClick={() => add('wait')}>
+        <button className="button small ghost" title="Add a wait node: time passes, nothing is shown. Link it like a scene." onClick={() => add('wait')}>
           <Hourglass size={13} /> Wait
         </button>
-        <button className="button small ghost" title="Search the scenes and add many of them in a row" disabled={looks.length === 0} onClick={() => setPicking(true)}>
+        <button className="button small ghost" title="Search the scenes and add many of them at once, as loose nodes to link" disabled={looks.length === 0} onClick={() => setPicking(true)}>
           <ListPlus size={14} /> Scenes…
         </button>
         <button
@@ -247,7 +248,7 @@ export function FlowGraph() {
         </button>
         <span className="flow-help">
           {empty
-            ? 'Add scenes. They play one after the other, in tempo, from the moment the note arrives.'
+            ? 'Add scenes, then drag from the dot of “On note” onto what should start with the note.'
             : 'Drag from the dot of a node onto another node to say what comes next. Several arrows start several nodes at once; an arrow back makes a loop.'}
         </span>
       </div>
@@ -326,9 +327,11 @@ export function FlowGraph() {
           beats={anchor(chaser, selected).kind === 'start' ? 1 : anchor(chaser, selected).beats}
           onClose={() => setPicking(false)}
           onAdd={(ids, beats) => {
-            const { graph, added } = appendChain(chaser, anchor(chaser, selected).id, ids, beats, nameOf)
+            const { graph, added } = addScenes(chaser, ids, beats, nameOf)
             editChaser(chaser.id, graph)
             select(added)
+            // They land below the rest: bring them into view.
+            setRefit((n) => n + 1)
           }}
         />
       )}

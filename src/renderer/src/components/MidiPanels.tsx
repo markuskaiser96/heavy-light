@@ -36,6 +36,7 @@ export function MidiTable() {
   const set = useStore((s) => s.set)
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<'note' | 'list'>('note')
+  const [kind, setKind] = useState<'all' | 'scenes' | 'flows'>('all')
   const query = search.trim().toLowerCase()
 
   const all: Row[] = [
@@ -43,7 +44,7 @@ export function MidiTable() {
     ...looks.map((item) => ({ item, chaser: false, folder: lookFolders.find((f) => f.id === item.folder)?.name ?? '' }))
   ]
   const label = (m: Triggerable['midi']) => (m ? `${noteName(m.note)} ${m.note}` : '')
-  const shown = all.filter(({ item, folder }) => !query || item.name.toLowerCase().includes(query) || folder.toLowerCase().includes(query) || label(item.midi).toLowerCase().includes(query))
+  const shown = all.filter(({ item, folder, chaser }) => (kind === 'all' || chaser === (kind === 'flows')) && (!query || item.name.toLowerCase().includes(query) || folder.toLowerCase().includes(query) || label(item.midi).toLowerCase().includes(query)))
   // By note: the keyboard from left to right, what has no note yet at the end.
   const rows = sort === 'list' ? shown : [...shown].sort((a, b) => (a.item.midi?.note ?? 999) - (b.item.midi?.note ?? 999) || (a.item.midi?.channel ?? 0) - (b.item.midi?.channel ?? 0))
   const level = (row: Row) => (row.chaser ? running?.find((r) => r.chaserId === row.item.id)?.level : active?.find((a) => a.lookId === row.item.id)?.level) ?? 0
@@ -68,6 +69,15 @@ export function MidiTable() {
           )}
         </div>
         <Segmented
+          value={kind}
+          onChange={setKind}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'scenes', label: 'Scenes' },
+            { value: 'flows', label: 'Flows' }
+          ]}
+        />
+        <Segmented
           value={sort}
           onChange={setSort}
           options={[
@@ -84,7 +94,7 @@ export function MidiTable() {
       </div>
 
       {all.length === 0 && <p className="empty">No scenes or flows yet. Build some, then give them their notes here.</p>}
-      {all.length > 0 && rows.length === 0 && <p className="empty">Nothing matches “{search.trim()}”.</p>}
+      {all.length > 0 && rows.length === 0 && <p className="empty">{query ? `Nothing matches “${search.trim()}”.` : `There are no ${kind} yet.`}</p>}
 
       {rows.length > 0 && (
         <table className="midi-table">

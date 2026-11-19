@@ -67,23 +67,28 @@ export function removeNodes(graph: Graph, ids: string[]): Graph {
   return { nodes: graph.nodes.filter((n) => !gone.has(n.id)), links: graph.links.filter((l) => !gone.has(l.from) && !gone.has(l.to)) }
 }
 
+/** Widest a block of newly added nodes gets before it wraps into another row. */
+const BLOCK_W = 920
+
 /**
- * Adds scenes one after the other, behind `after`. Returns the new graph and the ids of the new
- * nodes. They are placed in a row to the right of `after`, below what is already there.
+ * Adds scenes as loose nodes: nothing points at them yet, the user links them where they belong.
+ * They are set down as a block below what is already there. Returns the new graph and the new ids.
  */
-export function appendChain(graph: Graph, after: string, lookIds: string[], beats: number, nameOf?: NameOf): { graph: Graph; added: string[] } {
-  const from = graph.nodes.find((n) => n.id === after) ?? graph.nodes.find((n) => n.id === START)!
-  // Free row: the row of `from` if nothing sits to its right there, else below everything.
-  const taken = graph.nodes.some((n) => n.id !== from.id && n.x > from.x && Math.abs(n.y - from.y) < NODE_H + 8)
-  const y = taken ? Math.max(...graph.nodes.map((n) => n.y)) + NODE_H + ROW_GAP + 12 : from.y
-  let x = from.x + nodeWidth(from, nameOf) + NODE_GAP
+export function addScenes(graph: Graph, lookIds: string[], beats: number, nameOf?: NameOf): { graph: Graph; added: string[] } {
+  const left = Math.min(...graph.nodes.map((n) => n.x))
+  let y = Math.max(...graph.nodes.map((n) => n.y)) + NODE_H + ROW_GAP + 24
+  let x = left
   const nodes = lookIds.map((lookId) => {
+    const width = nodeWidth({ kind: 'scene', lookId }, nameOf)
+    if (x > left && x + width - left > BLOCK_W) {
+      x = left
+      y += NODE_H + ROW_GAP
+    }
     const node = newNode('scene', lookId, beats, x, y)
-    x += nodeWidth(node, nameOf) + NODE_GAP
+    x += width + NODE_GAP / 2
     return node
   })
-  const links: FlowLink[] = nodes.map((n, i) => ({ from: i === 0 ? from.id : nodes[i - 1].id, to: n.id }))
-  return { graph: { nodes: [...graph.nodes, ...nodes], links: [...graph.links, ...links] }, added: nodes.map((n) => n.id) }
+  return { graph: { nodes: [...graph.nodes, ...nodes], links: graph.links }, added: nodes.map((n) => n.id) }
 }
 
 /**

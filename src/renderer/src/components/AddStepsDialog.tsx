@@ -7,8 +7,8 @@ import { midiLabel } from './LookPanels'
 import { BeatLength } from './ui'
 
 /**
- * Picks many looks at once to become steps of a chaser: search, tick, add. The steps are added in
- * the order of the list, each with the same length.
+ * Picks many scenes at once to become nodes of a flow: search, tick, add. They are added in the
+ * order of the list, each with the same length, not linked to anything yet.
  */
 export function AddStepsDialog({ beats: startBeats, onAdd, onClose }: { beats: number; onAdd: (lookIds: string[], beats: number) => void; onClose: () => void }) {
   const looks = useStore((s) => s.show.looks)
@@ -54,14 +54,14 @@ export function AddStepsDialog({ beats: startBeats, onAdd, onClose }: { beats: n
       <div
         className="dialog pick-dialog"
         role="dialog"
-        aria-label="Add scenes as steps"
+        aria-label="Add scenes to the flow"
         onKeyDown={(e) => {
           if (e.key === 'Escape') onClose()
           else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !(e.target instanceof HTMLButtonElement))) add()
         }}
       >
         <header>
-          <h2>Add scenes as steps</h2>
+          <h2>Add scenes to the flow</h2>
           <button className="icon" onClick={onClose} title="Close">
             <X size={16} />
           </button>
@@ -119,14 +119,14 @@ export function AddStepsDialog({ beats: startBeats, onAdd, onClose }: { beats: n
 
         <footer>
           <span className="pick-length">
-            <span className="field-label">Each step lasts</span>
+            <span className="field-label">Each one lasts</span>
             <BeatLength value={beats} min={1 / 8} onChange={setBeats} />
           </span>
           <button className="button ghost" onClick={onClose}>
             Cancel
           </button>
           <button className="button primary" disabled={picked.length === 0} onClick={add}>
-            Add {picked.length === 1 ? '1 step' : `${picked.length} steps`}
+            Add {picked.length === 1 ? '1 scene' : `${picked.length} scenes`}
           </button>
         </footer>
       </div>

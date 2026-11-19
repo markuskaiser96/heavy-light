@@ -11,7 +11,7 @@ import { autoPlane, compilePatch, layoutSegments, mapImage, mapLayer, toWorld } 
 import { changedIds, discardItems, editBoth, editDraft, regrouped, saveItems, unsaved } from '../src/shared/drafts'
 import { newProp, propBox, PROP_TYPES } from '../src/shared/props'
 import { makeDraw } from '../src/shared/random'
-import { advanceFlow, appendChain, flowFromSteps, flowOver, link, newNode, normalizeFlow, removeNodes, START, startFlow, startNode } from '../src/shared/flow'
+import { addScenes, advanceFlow, flowFromSteps, flowOver, link, newNode, normalizeFlow, removeNodes, START, startFlow, startNode } from '../src/shared/flow'
 import { demoShow, emptyShow, newChaser, newLayer, newLook, normalizeShow, LIBRARY } from '../src/shared/show'
 import type { FromEngine, Show } from '../src/shared/types'
 
@@ -766,8 +766,11 @@ describe('flows', () => {
 
   it('does not multiply where arrows meet again, and ends when nothing follows', () => {
     // a → b and a → c, both → a: every round would double the places.
-    let graph = appendChain({ nodes: [startNode()], links: [] }, START, ['a'], 1).graph
+    // Added scenes are loose: nothing leads to them until the user says so.
+    let graph = addScenes({ nodes: [startNode()], links: [] }, ['a'], 1).graph
+    expect(graph.links).toEqual([])
     const a = graph.nodes[1].id
+    graph = link(graph, START, a)
     const b = newNode('scene', 'b', 1, 0, 0)
     const c = newNode('scene', 'c', 1, 0, 0)
     graph = { nodes: [...graph.nodes, b, c], links: [...graph.links, { from: a, to: b.id }, { from: a, to: c.id }, { from: b.id, to: a }, { from: c.id, to: a }] }
