@@ -2,6 +2,8 @@ import dgram from 'node:dgram'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Engine } from '../src/engine/engine'
 import { createArtDmx, finishArtDmx } from '../src/engine/artnet'
+import { compileCustom, evalCurve, newCustomEffect, newDrive, normalizeEffect } from '../src/shared/custom'
+import { LookRenderer } from '../src/engine/render'
 import { EFFECTS, prepareParams, defaultParams } from '../src/shared/effects'
 import { makeGenericPixelFixture, resolveMode, type OflFixture } from '../src/shared/ofl'
 import { encodeImage } from '../src/shared/images'
@@ -156,6 +158,81 @@ describe('show files', () => {
     expect(normalizeShow(JSON.parse(JSON.stringify(old))).props).toEqual([])
     const show = { ...emptyShow(), props: [{ id: 'a', name: 'Riser', kind: 'riser', position: { x: 1 } }, { id: 'b', name: 'Fog', kind: 'fog-machine' }] }
     expect(normalizeShow(JSON.parse(JSON.stringify(show))).props).toEqual([{ ...newProp('riser', 'a', 'Riser'), position: { x: 1, y: 0, z: 0 } }])
+  })
+})
+
+describe('custom effects', () => {
+  /** Five pixels from one end to the other, rendered at a time and beat. */
+  const render = (effect: ReturnType<typeof newCustomEffect>, t: number, beat?: number, speed = 1) => {
+    const out = new Float32Array(15)
+    compileCustom(effect).render({ out, u: Float32Array.from([0, 0.25, 0.5, 0.75, 1]), count: 5, t, beat, p: { speed } })
+    return Array.from(out, (v) => +v.toFixed(3))
+  }
+  const white = (patch: Partial<ReturnType<typeof newCustomEffect>['brightness']>) => {
+    const effect = newCustomEffect('e', 'Effect')
+    effect.colour.color = '#ffffff'
+    effect.brightness = { ...effect.brightness, ...patch }
+    return effect
+  }
+
+  it('reads a drawn curve: eased, straight or in steps', () => {
+    const points = [{ x: 0, y: 0 }, { x: 0.5, y: 1 }, { x: 1, y: 0 }]
+    expect(evalCurve({ shape: 'smooth', points }, 0.25)).toBeCloseTo(0.5)
+    expect(evalCurve({ shape: 'smooth', points }, 0.125)).toBeCloseTo(0.15625)
+    expect(evalCurve({ shape: 'linear', points }, 0.125)).toBeCloseTo(0.25)
+    expect(evalCurve({ shape: 'step', points }, 0.6)).toBe(1)
+    expect(evalCurve({ shape: 'linear', points: [{ x: 0.2, y: 0.3 }, { x: 0.6, y: 0.9 }] }, 0)).toBe(0.3)
+    expect(evalCurve({ shape: 'linear', points: [{ x: 0.2, y: 0.3 }, { x: 0.6, y: 0.9 }] }, 1)).toBe(0.9)
+  })
+
+  it('a curve over time makes all pixels pulse together, in seconds or in beats', () => {
+    const pulse = white({ drive: newDrive('sine', { hz: 1 }) })
+    expect(render(pulse, 0)).toEqual(Array(15).fill(0))
+    expect(render(pulse, 0.5)).toEqual(Array(15).fill(1))
+    expect(render(pulse, 0.25, undefined, 2)).toEqual(Array(15).fill(1))
+    // In beats the time does not matter, only the beat count: one pass every two beats peaks on beat 1.
+    const onBeat = white({ drive: newDrive('sine', { sync: 'beats', beats: 2 }) })
+    expect(render(onBeat, 123.4, 1)).toEqual(Array(15).fill(1))
+    expect(render(onBeat, 123.4, 2)).toEqual(Array(15).fill(0))
+  })
+
+  it('a curve over position lies along the pixels and can travel', () => {
+    const ramp = white({ drive: newDrive('decay', { over: 'position', hz: 0 }) })
+    expect(render(ramp, 7).filter((_, i) => i % 3 === 0)).toEqual([1, 0.75, 0.5, 0.25, 0])
+    // Half a length further on, the bright start of the curve sits in the middle.
+    const moving = white({ drive: newDrive('decay', { over: 'position', hz: 1 }) })
+    expect(render(moving, 0.5).filter((_, i) => i % 3 === 0)).toEqual([0.5, 0.25, 1, 0.75, 0.5])
+    const back = white({ drive: newDrive('decay', { over: 'position', hz: 1, direction: 'backward' }) })
+    expect(render(back, 0.25).filter((_, i) => i % 3 === 0)).toEqual([0.75, 0.5, 0.25, 1, 0.75])
+  })
+
+  it('a colour curve picks its colours from the gradient', () => {
+    const effect = newCustomEffect('e', 'Effect')
+    effect.brightness = { ...effect.brightness, mode: 'fixed', value: 0.5 }
+    effect.colour = { ...effect.colour, mode: 'curve', gradient: [{ at: 0, color: '#ff0000' }, { at: 1, color: '#0000ff' }], drive: newDrive('rise', { over: 'position', hz: 0 }) }
+    const out = render(effect, 3)
+    expect(out.slice(0, 3)).toEqual([0.5, 0, 0])
+    expect(out.slice(6, 9)).toEqual([0.25, 0, 0.25])
+    expect(out.slice(12)).toEqual([0, 0, 0.5])
+  })
+
+  it('repairs what a file got wrong', () => {
+    const e = normalizeEffect({ id: 'x', brightness: { mode: 'curve', value: 9, drive: { hz: -3, curve: { shape: 'wobbly', points: [{ x: 2, y: -1 }] } } } } as never)
+    expect(e.name).toBe('Effect')
+    expect(e.brightness.value).toBe(1)
+    expect(e.brightness.drive).toMatchObject({ hz: 0, over: 'time', curve: { shape: 'smooth', points: [{ x: 1, y: 0 }] } })
+    expect(e.colour.gradient).toHaveLength(2)
+  })
+
+  it('plays in a look like a built-in effect', () => {
+    const show = demoShow()
+    const patch = compilePatch(show)
+    const renderer = new LookRenderer(show, patch)
+    const frame = new Float32Array(patch.cellCount * 3)
+    renderer.render(frame, [{ lookId: 'look-11', level: 1, t: 0.4, beat: 0.8 }])
+    expect(Math.max(...frame)).toBeGreaterThan(0.9)
+    expect(frame.filter((v) => v === 0).length).toBeGreaterThan(frame.length / 3)
+    expect(defaultParams('custom:comet')).toEqual({ speed: 1 })
   })
 })
 

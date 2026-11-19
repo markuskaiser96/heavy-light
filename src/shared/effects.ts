@@ -19,6 +19,8 @@ export interface RenderArgs {
   count: number
   /** Seconds since the look started. */
   t: number
+  /** Beats since the look started, counted by the MIDI clock or the show tempo. Absent in previews without a tempo. */
+  beat?: number
   /** Parameters with colours already parsed to [r, g, b]. */
   p: Record<string, number | boolean | string | RGB>
   /** Image effect only: the bitmap, and each pixel's position on the image plane in metres from its centre. */
@@ -397,6 +399,8 @@ export const EFFECT_BY_ID = new Map(EFFECTS.map((e) => [e.id, e]))
 
 export function defaultParams(effectId: string): Record<string, ParamValue> {
   const def = EFFECT_BY_ID.get(effectId)
+  // Every custom effect has the same single layer setting.
+  if (!def && effectId.startsWith('custom:')) return { speed: 1 }
   return def ? Object.fromEntries(def.params.map((p) => [p.key, p.default])) : {}
 }
 

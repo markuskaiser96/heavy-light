@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { demoShow, emptyShow, normalizeShow } from '@shared/show'
-import type { Chaser, EngineStatus, FixtureInstance, Layer, Look, MidiEvent, Show, StageProp } from '@shared/types'
+import type { Chaser, CustomEffect, EngineStatus, FixtureInstance, Layer, Look, Mapping, MidiEvent, Show, StageProp } from '@shared/types'
 import type { HeavyApi } from '../../preload'
 
 declare global {
@@ -30,7 +30,7 @@ function storedPanels(): Record<PanelName, number> {
   return panels
 }
 
-export type View = 'stage' | 'looks' | 'chasers' | 'live'
+export type View = 'stage' | 'looks' | 'effects' | 'chasers' | 'live'
 
 /** Latest pixel colours from the engine. Kept outside React state: it changes 60 times a second. */
 export const frame: { pixels: Uint8Array } = { pixels: new Uint8Array(0) }
@@ -50,6 +50,9 @@ interface State {
   closedFolders: string[]
   layerId: string | null
   chaserId: string | null
+  effectId: string | null
+  /** How the effect being built in the Effects tab is laid over the fixtures on stage. */
+  effectMapping: Mapping
   /** Send the look or chaser being edited to the stage. */
   preview: boolean
   learning: boolean
@@ -92,6 +95,8 @@ export const useStore = create<State>((set, get) => ({
   closedFolders: [],
   layerId: null,
   chaserId: null,
+  effectId: null,
+  effectMapping: 'fixture',
   preview: true,
   learning: false,
   status: null,
@@ -160,6 +165,7 @@ export const useStore = create<State>((set, get) => ({
       lookId: show.looks[0]?.id ?? null,
       layerId: show.looks[0]?.layers[0]?.id ?? null,
       chaserId: show.chasers[0]?.id ?? null,
+      effectId: show.effects[0]?.id ?? null,
       learning: false
     })
 }))
@@ -173,6 +179,9 @@ export const editFixture = (id: string, patch: Partial<FixtureInstance>, key?: s
 
 export const editProp = (id: string, patch: Partial<StageProp>, key?: string): void =>
   edit((show) => ({ ...show, props: show.props.map((p) => (p.id === id ? { ...p, ...patch } : p)) }), key)
+
+export const editEffect = (id: string, patch: Partial<CustomEffect>, key?: string): void =>
+  edit((show) => ({ ...show, effects: show.effects.map((e) => (e.id === id ? { ...e, ...patch } : e)) }), key)
 
 export const editLook = (id: string, patch: Partial<Look>, key?: string): void =>
   edit((show) => ({ ...show, looks: show.looks.map((l) => (l.id === id ? { ...l, ...patch } : l)) }), key)

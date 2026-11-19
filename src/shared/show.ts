@@ -1,3 +1,4 @@
+import { customKey, newCustomEffect, newDrive, normalizeEffect } from './custom'
 import { defaultParams } from './effects'
 import { encodeImage, isImageAsset } from './images'
 import { genericPixelKey, isOflFixture, makeGenericPixelFixture, type OflFixture } from './ofl'
@@ -36,10 +37,11 @@ export function emptyShow(): Show {
     props: [],
     looks: [],
     lookFolders: [],
+    effects: [],
     chasers: [],
     images: {},
     stage: { width: 8, depth: 5 },
-    settings: { outputRate: 60, gamma: 2.2 }
+    settings: { outputRate: 60, gamma: 2.2, bpm: 120 }
   }
 }
 
@@ -113,6 +115,7 @@ export function normalizeShow(value: unknown): Show {
       .filter((p) => isPropKind(p.kind))
       .map((p) => ({ ...p, position: { ...ORIGIN, ...p.position }, rotation: { ...ORIGIN, ...p.rotation }, size: { ...propType(p.kind).size, ...p.size } })),
     looks: (raw.looks ?? []).map((l, i) => ({ ...newLook(l.name ?? 'Look', i), ...l, layers: (l.layers ?? []).map((layer) => ({ ...newLayer(layer.effect), ...layer })) })),
+    effects: (raw.effects ?? []).filter((e) => typeof e?.id === 'string').map(normalizeEffect),
     lookFolders: (raw.lookFolders ?? []).filter((f) => typeof f?.id === 'string' && typeof f.name === 'string'),
     chasers: (raw.chasers ?? []).map((c, i) => ({ ...newChaser(c.name ?? 'Chaser', i), ...c, steps: (c.steps ?? []).map((step) => ({ ...newStep(''), ...step })) })),
     stage: { ...base.stage, ...raw.stage },
@@ -226,6 +229,17 @@ export function demoShow(): Show {
     look(9, 'Fire', 45, { fadeIn: 300, fadeOut: 600 }, [{ effect: 'image', params: { image: 'flames', moveY: 0.35, moveX: 0.04 } }])
   ]
   show.images.flames = flames()
+
+  // Two effects built from curves, as a starting point for the Effects tab.
+  const breathing = newCustomEffect('breathing', 'Breathing')
+  breathing.brightness.drive = newDrive('sine', { sync: 'beats', beats: 2 })
+  breathing.colour.color = '#ff5a1f'
+  const comet = newCustomEffect('comet', 'Comet')
+  comet.brightness.drive = newDrive('bump', { over: 'position', hz: 0.6 })
+  comet.brightness.drive.curve = { shape: 'smooth', points: [{ x: 0, y: 0 }, { x: 0.55, y: 0 }, { x: 0.9, y: 1 }, { x: 1, y: 0 }] }
+  comet.colour = { ...comet.colour, mode: 'curve', gradient: [{ at: 0, color: '#2d4bff' }, { at: 0.6, color: '#18b6ff' }, { at: 1, color: '#ffffff' }], drive: { ...comet.brightness.drive, curve: comet.brightness.drive.curve } }
+  show.effects = [breathing, comet]
+  show.looks.push(look(10, 'Comets', 46, { fadeOut: 300 }, [{ effect: customKey('comet') }]))
   show.lookFolders = [
     { id: 'folder-washes', name: 'Washes' },
     { id: 'folder-hits', name: 'Hits and strobes' }

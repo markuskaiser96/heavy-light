@@ -1,6 +1,7 @@
 import { X } from 'lucide-react'
 import { useEffect } from 'react'
 import { ChaserEditor, ChaserList } from './components/ChaserPanels'
+import { EffectEditor, EffectList } from './components/EffectPanels'
 import { LookPads, SignalPanel } from './components/LivePanels'
 import { LookEditor, LookList } from './components/LookPanels'
 import { Resizer } from './components/Resizer'
@@ -22,7 +23,10 @@ function connectEngine(): void {
       heavy.send({ type: 'show', show: useStore.getState().show })
     })
   }
-  const previewId = (s: ReturnType<typeof useStore.getState>) => (!s.preview ? null : s.view === 'looks' ? s.lookId : s.view === 'chasers' ? s.chaserId : null)
+  type S = ReturnType<typeof useStore.getState>
+  const previewId = (s: S) =>
+    !s.preview ? null : s.view === 'looks' ? s.lookId : s.view === 'chasers' ? s.chaserId : s.view === 'effects' && s.effectId ? `effect:${s.effectId}` : null
+  const sendPreview = (s: S) => heavy.send({ type: 'preview', id: previewId(s), mapping: s.effectMapping })
 
   heavy.onEngine((message) => {
     if (message.type === 'frame') frame.pixels = message.pixels
@@ -42,21 +46,21 @@ function connectEngine(): void {
 
   heavy.onEngineRestarted(() => {
     sendShow()
-    heavy.send({ type: 'preview', id: previewId(useStore.getState()) })
+    sendPreview(useStore.getState())
   })
 
   heavy.onSaveAndClose(() => void saveShow().then((saved) => saved && heavy.close()))
 
   useStore.subscribe((s, prev) => {
     if (s.show !== prev.show) sendShow()
-    if (previewId(s) !== previewId(prev)) heavy.send({ type: 'preview', id: previewId(s) })
+    if (previewId(s) !== previewId(prev) || s.effectMapping !== prev.effectMapping) sendPreview(s)
     if (s.dirty !== prev.dirty || s.show.name !== prev.show.name) heavy.setDirty(s.dirty, s.show.name)
   })
 
   void loadInitialShow().then(() => {
     const s = useStore.getState()
     heavy.setDirty(s.dirty, s.show.name)
-    heavy.send({ type: 'preview', id: previewId(s) })
+    sendPreview(s)
   })
 }
 
@@ -80,8 +84,8 @@ function useShortcuts(): void {
       } else if (!typing && e.key === 'Escape') {
         if (s.learning) s.set({ learning: false })
         else if (s.view === 'live') window.heavy.send({ type: 'releaseAll' })
-      } else if (!typing && !mod && ['1', '2', '3', '4'].includes(e.key)) {
-        s.setView((['stage', 'looks', 'chasers', 'live'] as const)[Number(e.key) - 1])
+      } else if (!typing && !mod && ['1', '2', '3', '4', '5'].includes(e.key)) {
+        s.setView((['stage', 'looks', 'effects', 'chasers', 'live'] as const)[Number(e.key) - 1])
       }
     }
     window.addEventListener('keydown', onKey)
@@ -109,15 +113,17 @@ export function App() {
       <main className="workspace" style={widths}>
         {view === 'stage' && <FixtureList />}
         {view === 'looks' && <LookList />}
+        {view === 'effects' && <EffectList />}
         {view === 'chasers' && <ChaserList />}
         {view !== 'live' && <Resizer panel="left" />}
         <div className="center">
           <Stage3D />
           {view === 'live' && <LookPads />}
         </div>
-        <Resizer panel={view === 'looks' || view === 'chasers' ? 'rightWide' : 'right'} />
+        <Resizer panel={view === 'looks' || view === 'chasers' || view === 'effects' ? 'rightWide' : 'right'} />
         {view === 'stage' && <FixtureInspector />}
         {view === 'looks' && <LookEditor />}
+        {view === 'effects' && <EffectEditor />}
         {view === 'chasers' && <ChaserEditor />}
         {view === 'live' && <SignalPanel />}
       </main>

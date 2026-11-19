@@ -1,7 +1,8 @@
-import { EFFECT_BY_ID, prepareParams, type EffectDef, type RenderArgs } from '@shared/effects'
+import { customKey, resolveEffect } from '@shared/custom'
+import { prepareParams, type EffectDef, type RenderArgs } from '@shared/effects'
 import { imagePixels } from '@shared/images'
 import { mapImage, mapLayer, type Patch } from '@shared/patch'
-import type { Blend, Show } from '@shared/types'
+import type { Blend, Layer, Mapping, Show } from '@shared/types'
 
 interface CompiledLayer {
   def: EffectDef
@@ -17,7 +18,12 @@ export interface ActiveLook {
   level: number
   /** Seconds since the look started. */
   t: number
+  /** Beats since the look started. */
+  beat: number
 }
+
+/** Stands in for a look while a custom effect is tried out on its own in the Effects tab. */
+export const EFFECT_PREVIEW = '#effect-preview'
 
 /** Renders active looks into one RGB float frame (one triple per patched cell). */
 export class LookRenderer {
@@ -25,28 +31,41 @@ export class LookRenderer {
   /** Look ids in show order: later looks are drawn on top. */
   readonly order: string[]
 
-  constructor(show: Show, patch: Patch) {
-    this.order = show.looks.map((l) => l.id)
+  constructor(
+    private show: Show,
+    private patch: Patch
+  ) {
+    this.order = [...show.looks.map((l) => l.id), EFFECT_PREVIEW]
     for (const look of show.looks) {
-      const compiled: CompiledLayer[] = []
-      for (const layer of look.layers) {
-        const def = EFFECT_BY_ID.get(layer.effect)
-        if (!def) continue
-        const { cells, u } = mapLayer(show, patch, layer)
-        if (cells.length === 0) continue
-        const args: CompiledLayer['args'] = { out: new Float32Array(cells.length * 3), u, count: cells.length, t: 0, p: prepareParams(def, layer.params) }
-        if (def.id === 'image') {
-          const id = String(layer.params.image ?? '')
-          const asset = show.images[id]
-          if (asset) {
-            args.image = { width: asset.width, height: asset.height, pixels: imagePixels(id, asset) }
-            Object.assign(args, mapImage(show, patch, layer))
-          }
-        }
-        compiled.push({ def, cells, blend: layer.blend, opacity: Math.min(1, Math.max(0, layer.opacity)), args })
-      }
-      this.layers.set(look.id, compiled)
+      this.layers.set(
+        look.id,
+        look.layers.flatMap((layer) => this.compile(layer) ?? [])
+      )
     }
+  }
+
+  private compile(layer: Layer): CompiledLayer | null {
+    const { show, patch } = this
+    const def = resolveEffect(show.effects, layer.effect)
+    if (!def) return null
+    const { cells, u } = mapLayer(show, patch, layer)
+    if (cells.length === 0) return null
+    const args: CompiledLayer['args'] = { out: new Float32Array(cells.length * 3), u, count: cells.length, t: 0, p: prepareParams(def, layer.params) }
+    if (def.id === 'image') {
+      const id = String(layer.params.image ?? '')
+      const asset = show.images[id]
+      if (asset) {
+        args.image = { width: asset.width, height: asset.height, pixels: imagePixels(id, asset) }
+        Object.assign(args, mapImage(show, patch, layer))
+      }
+    }
+    return { def, cells, blend: layer.blend, opacity: Math.min(1, Math.max(0, layer.opacity)), args }
+  }
+
+  /** Puts one custom effect on every fixture, to be shown as EFFECT_PREVIEW. null clears it. */
+  previewEffect(id: string | null, mapping: Mapping): void {
+    const layer = id === null ? null : this.compile({ id: EFFECT_PREVIEW, effect: customKey(id), params: {}, targets: [], mapping, blend: 'normal', opacity: 1 })
+    this.layers.set(EFFECT_PREVIEW, layer ? [layer] : [])
   }
 
   /** `active` must be sorted in show order. */
@@ -59,6 +78,7 @@ export class LookRenderer {
         const alpha = layer.opacity * a.level
         if (alpha <= 0) continue
         layer.args.t = a.t
+        layer.args.beat = a.beat
         layer.def.render(layer.args)
         blend(frame, layer.args.out, layer.cells, layer.blend, alpha)
       }

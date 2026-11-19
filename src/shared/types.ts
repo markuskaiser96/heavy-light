@@ -93,6 +93,43 @@ export interface Layer {
   opacity: number
 }
 
+/** A curve drawn by the user: points over one pass, x and y both 0..1. Before the first and after the last point it stays level. */
+export interface Curve {
+  /** Sorted by x. */
+  points: { x: number; y: number }[]
+  /** How the curve runs from point to point: eased, straight, or jumping. */
+  shape: 'smooth' | 'linear' | 'step'
+}
+
+/** What reads a curve: the time, or the position of each pixel. */
+export interface CurveDrive {
+  curve: Curve
+  /** time: all pixels follow the curve together. position: the curve lies along the pixels (the layer's mapping) and can travel. */
+  over: 'time' | 'position'
+  /** Position only: how often the curve fits along the mapping. */
+  repeats: number
+  /** hz: passes per second. beats: one pass lasts `beats` beats of the MIDI clock (or of the show tempo while there is none). */
+  sync: 'hz' | 'beats'
+  hz: number
+  beats: number
+  direction: 'forward' | 'backward' | 'bounce'
+}
+
+export interface GradientStop {
+  /** 0..1 */
+  at: number
+  color: string
+}
+
+/** An effect built by the user: brightness and colour, each fixed or driven by a curve. Layers use it as effect `custom:<id>`. */
+export interface CustomEffect {
+  id: string
+  name: string
+  brightness: { mode: 'fixed' | 'curve'; value: number; drive: CurveDrive }
+  /** With a curve, the curve picks the place on the gradient: low = its start, high = its end. */
+  colour: { mode: 'fixed' | 'curve'; color: string; gradient: GradientStop[]; drive: CurveDrive }
+}
+
 export interface MidiNote {
   /** 1–16, or 0 for any channel. */
   channel: number
@@ -160,6 +197,7 @@ export interface Show {
   props: StageProp[]
   looks: Look[]
   lookFolders: LookFolder[]
+  effects: CustomEffect[]
   chasers: Chaser[]
   images: Record<string, ImageAsset>
   stage: { width: number; depth: number }
@@ -168,6 +206,8 @@ export interface Show {
     outputRate: number
     /** Gamma applied to output values (1 = raw). LEDs are linear, so ~2.2 makes fades look even. */
     gamma: number
+    /** Tempo for everything counted in beats while no MIDI clock arrives. */
+    bpm: number
   }
 }
 
@@ -182,7 +222,8 @@ export type ToEngine =
   | { type: 'master'; value: number }
   | { type: 'blackout'; on: boolean }
   | { type: 'output'; on: boolean }
-  | { type: 'preview'; id: string | null }
+  /** `id` is a look, a chaser or `effect:<id>` for a custom effect, which is then shown on all fixtures with `mapping`. */
+  | { type: 'preview'; id: string | null; mapping?: Mapping }
 
 export interface MidiEvent {
   port: string

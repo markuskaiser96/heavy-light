@@ -1,9 +1,9 @@
 import dgram from 'node:dgram'
 import { Comp } from '@shared/ofl'
 import { compilePatch, type Patch, type PatchedFixture } from '@shared/patch'
-import { ARTNET_PORT, type Chaser, type EngineStatus, type FromEngine, type Look, type MidiEvent, type Show, type ToEngine } from '@shared/types'
+import { ARTNET_PORT, type Chaser, type EngineStatus, type FromEngine, type Look, type Mapping, type MidiEvent, type Show, type ToEngine } from '@shared/types'
 import { ARTNET_HEADER, createArtDmx, finishArtDmx } from './artnet'
-import { LookRenderer, type ActiveLook } from './render'
+import { EFFECT_PREVIEW, LookRenderer, type ActiveLook } from './render'
 import { Samples } from './stats'
 
 interface Universe {
@@ -22,7 +22,20 @@ interface FixtureOut {
   targets: number[]
 }
 
-interface Playing {
+/** Counts beats for something that plays: along the MIDI clock while there is one, else at a tempo of its own. */
+interface Counter {
+  /** A look: beats since it started. A chaser: beats played of the current step. */
+  beat: number
+  /** When `beat` was last moved on, and where the MIDI clock stood then (null while counting at its own tempo). */
+  movedAt: number
+  clockAt: number | null
+  /** Current length of a beat in milliseconds. */
+  beatLength: number
+}
+
+const counter = (now: number): Counter => ({ beat: 0, movedAt: now, clockAt: null, beatLength: 500 })
+
+interface Playing extends Counter {
   on: boolean
   /** 0..1 fade position. */
   fade: number
@@ -37,11 +50,6 @@ interface Running extends Playing {
   previous: number
   stepStartedAt: number
   previousStartedAt: number
-  /** Beats played of the current step. */
-  beat: number
-  /** When `beat` was last moved on, and where the MIDI clock stood then (null while the chaser runs at its own tempo). */
-  movedAt: number
-  clockAt: number | null
   direction: 1 | -1
   /** Steps played so far, including the current one. */
   played: number
@@ -85,8 +93,10 @@ export class Engine {
   private playing = new Map<string, Playing>()
   private runs = new Map<string, Running>()
   /** Per look: how strongly it is shown this frame and its effect time. Filled by looks and chasers alike. */
-  private levels = new Map<string, { level: number; t: number }>()
+  private levels = new Map<string, { level: number; t: number; beat: number }>()
   private previewId: string | null = null
+  private previewMapping: Mapping = 'fixture'
+  private previewCount = counter(0)
   private previewRun: Running | null = null
   private previewStart = 0
   /** The MIDI clock being followed: who sends it, ticks counted, time of the last one, smoothed time between ticks. */
@@ -166,8 +176,11 @@ export class Engine {
         if (message.id !== this.previewId) {
           this.previewId = message.id
           this.previewStart = performance.now()
+          this.previewCount = counter(this.previewStart)
           this.previewRun = null
         }
+        this.previewMapping = message.mapping ?? 'fixture'
+        this.previewEffect()
         break
     }
     // Act on the change right away instead of waiting for the next scheduled frame.
@@ -237,20 +250,31 @@ export class Engine {
     return (c.ticks + Math.min(1, Math.max(0, (now - c.lastAt) / c.interval))) / TICKS_PER_BEAT
   }
 
+  /** Beats that have passed for `c` since it was last asked: along the MIDI clock if `follow` and there is one, else at `bpm`. */
+  private count(c: Counter, bpm: number, follow: boolean, now: number): number {
+    const own = 60000 / Math.max(1, bpm)
+    let beats = Math.max(0, now - c.movedAt) / own
+    c.beatLength = own
+    if (follow && this.clockUsable(now)) {
+      const position = this.clockBeats(now)
+      // The frame in which the clock takes over still counts at the own tempo.
+      if (c.clockAt !== null) beats = Math.max(0, position - c.clockAt)
+      c.clockAt = position
+      c.beatLength = this.clock.interval * TICKS_PER_BEAT
+    } else c.clockAt = null
+    c.movedAt = now
+    return beats
+  }
+
   /** Moves a chaser on to where it should be at `now`, at its own tempo or along the MIDI clock. */
   private run(chaser: Chaser, r: Running, now: number, loop: boolean): void {
-    const own = 60000 / Math.max(1, chaser.bpm)
-    let beats = Math.max(0, now - r.movedAt) / own
-    let beatLength = own
-    if (chaser.tempo === 'midi' && this.clockUsable(now)) {
-      const position = this.clockBeats(now)
-      // The frame in which the clock takes over still counts at the chaser's own tempo.
-      if (r.clockAt !== null) beats = Math.max(0, position - r.clockAt)
-      r.clockAt = position
-      beatLength = this.clock.interval * TICKS_PER_BEAT
-    } else r.clockAt = null
-    r.movedAt = now
-    advance(chaser, r, beats, now, loop, beatLength)
+    advance(chaser, r, this.count(r, chaser.bpm, chaser.tempo === 'midi', now), now, loop)
+  }
+
+  /** Shows the custom effect being edited in the Effects tab on all fixtures. */
+  private previewEffect(): void {
+    const id = this.previewId?.startsWith('effect:') ? this.previewId.slice(7) : null
+    this.renderer?.previewEffect(id, this.previewMapping)
   }
 
   private isOn(id: string): boolean {
@@ -277,13 +301,14 @@ export class Engine {
     }
     const now = performance.now()
     if (chaser) this.runs.set(id, startRun(chaser, now, current?.fade ?? 0, intensity))
-    else this.playing.set(id, { on: true, fade: current?.fade ?? 0, intensity, startedAt: now })
+    else this.playing.set(id, { ...counter(now), on: true, fade: current?.fade ?? 0, intensity, startedAt: now })
   }
 
   private setShow(show: Show): void {
     this.show = show
     this.patch = compilePatch(show)
     this.renderer = new LookRenderer(show, this.patch)
+    this.previewEffect()
     this.looks = new Map(show.looks.map((l) => [l.id, l]))
     this.chasers = new Map(show.chasers.map((c) => [c.id, c]))
     this.warnings = this.patch.warnings
@@ -346,10 +371,14 @@ export class Engine {
 
     const levels = this.levels
     levels.clear()
+    const bpm = this.show?.settings.bpm ?? 120
     for (const [id, p] of this.playing) {
       const look = this.looks.get(id)
       if (!look || !fade(p, look, dt)) this.playing.delete(id)
-      else this.showLook(id, p.fade * p.intensity, (now - p.startedAt) / 1000)
+      else {
+        p.beat += this.count(p, bpm, true, now)
+        this.showLook(id, p.fade * p.intensity, (now - p.startedAt) / 1000, p.beat)
+      }
     }
     for (const [id, r] of this.runs) {
       const chaser = this.chasers.get(id)
@@ -370,7 +399,9 @@ export class Engine {
         this.showStep(chaser, this.previewRun, now, 1)
       } else {
         this.previewRun = null
-        if (this.looks.has(this.previewId)) this.showLook(this.previewId, 1, (now - this.previewStart) / 1000)
+        this.previewCount.beat += this.count(this.previewCount, bpm, true, now)
+        const id = this.previewId.startsWith('effect:') ? EFFECT_PREVIEW : this.previewId
+        if (id === EFFECT_PREVIEW || this.looks.has(id)) this.showLook(id, 1, (now - this.previewStart) / 1000, this.previewCount.beat)
       }
     }
 
@@ -378,7 +409,7 @@ export class Engine {
       const active: ActiveLook[] = []
       for (const id of this.renderer.order) {
         const l = levels.get(id)
-        if (l) active.push({ lookId: id, level: l.level, t: l.t })
+        if (l) active.push({ lookId: id, level: l.level, t: l.t, beat: l.beat })
       }
       this.renderer.render(this.frame, active)
       this.writeOutput()
@@ -403,14 +434,17 @@ export class Engine {
   }
 
   /** Adds a look to this frame. Several sources of the same look add up; the strongest one sets the effect time. */
-  private showLook(lookId: string, level: number, t: number): void {
+  private showLook(lookId: string, level: number, t: number, beat: number): void {
     if (!lookId || level <= 0) return
     const existing = this.levels.get(lookId)
     if (!existing) {
-      this.levels.set(lookId, { level: Math.min(1, level), t })
+      this.levels.set(lookId, { level: Math.min(1, level), t, beat })
       return
     }
-    if (level > existing.level) existing.t = t
+    if (level > existing.level) {
+      existing.t = t
+      existing.beat = beat
+    }
     existing.level = Math.min(1, existing.level + level)
   }
 
@@ -420,9 +454,9 @@ export class Engine {
     if (!step) return
     const share = Math.min(1, chaser.crossfade)
     const x = share > 0 && r.previous >= 0 ? Math.min(1, r.beat / (stepBeats(chaser, r.index) * share)) : 1
-    this.showLook(step.lookId, level * x, (now - r.stepStartedAt) / 1000)
+    this.showLook(step.lookId, level * x, (now - r.stepStartedAt) / 1000, r.beat)
     const previous = chaser.steps[r.previous]
-    if (x < 1 && previous) this.showLook(previous.lookId, level * (1 - x), (now - r.previousStartedAt) / 1000)
+    if (x < 1 && previous) this.showLook(previous.lookId, level * (1 - x), (now - r.previousStartedAt) / 1000, (now - r.previousStartedAt) / r.beatLength)
   }
 
   private writeOutput(): void {
@@ -463,7 +497,7 @@ export class Engine {
 
   private status(): EngineStatus {
     return {
-      active: [...this.levels].map(([lookId, l]) => ({ lookId, level: l.level })),
+      active: [...this.levels].filter(([lookId]) => lookId !== EFFECT_PREVIEW).map(([lookId, l]) => ({ lookId, level: l.level })),
       chasers: [...this.runs].map(([chaserId, r]) => ({ chaserId, level: r.fade * r.intensity, step: r.index })),
       previewStep: this.previewRun?.index ?? null,
       master: this.master,
@@ -491,6 +525,7 @@ function fade(p: Playing, item: { fadeIn: number; fadeOut: number }, dt: number)
 
 function startRun(chaser: Chaser, now: number, fadeFrom: number, intensity: number): Running {
   return {
+    ...counter(now),
     on: true,
     fade: fadeFrom,
     intensity,
@@ -499,9 +534,6 @@ function startRun(chaser: Chaser, now: number, fadeFrom: number, intensity: numb
     previous: -1,
     stepStartedAt: now,
     previousStartedAt: now,
-    beat: 0,
-    movedAt: now,
-    clockAt: null,
     direction: 1,
     played: 1,
     done: false
@@ -515,10 +547,9 @@ function stepBeats(chaser: Chaser, index: number): number {
 
 /**
  * Moves a chaser on by `beats`. What is left over when a step ends counts towards the next one,
- * so the chaser keeps its tempo no matter when frames happen. `beatLength` is the current length
- * of a beat in milliseconds.
+ * so the chaser keeps its tempo no matter when frames happen.
  */
-function advance(chaser: Chaser, r: Running, beats: number, now: number, loop: boolean, beatLength: number): void {
+function advance(chaser: Chaser, r: Running, beats: number, now: number, loop: boolean): void {
   const n = chaser.steps.length
   if (n === 0) return
   if (r.index >= n) r.index = 0
@@ -542,7 +573,7 @@ function advance(chaser: Chaser, r: Running, beats: number, now: number, loop: b
     r.previous = r.index
     r.previousStartedAt = r.stepStartedAt
     r.index = next
-    r.stepStartedAt = now - r.beat * beatLength
+    r.stepStartedAt = now - r.beat * r.beatLength
     r.played++
   }
 }

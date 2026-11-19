@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, Copy, Eye, EyeOff, Folder, FolderOpen, FolderPlus, ImagePlus, Pencil, Plus, Search, Trash2, X } from 'lucide-react'
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { customId, customKey, resolveEffect } from '@shared/custom'
 import { defaultParams, EFFECT_BY_ID, EFFECTS } from '@shared/effects'
 import { LOOK_COLORS, newId, newLayer, newLook } from '@shared/show'
 import type { Blend, Layer, Look, Mapping, Triggerable } from '@shared/types'
@@ -332,7 +333,10 @@ function ImageSource({ look, layer }: { look: Look; layer: Layer }) {
 }
 
 function LayerEditor({ look, layer }: { look: Look; layer: Layer }) {
-  const def = EFFECT_BY_ID.get(layer.effect)
+  const custom = useStore((s) => s.show.effects)
+  const set = useStore((s) => s.set)
+  const def = useMemo(() => resolveEffect(custom, layer.effect), [custom, layer.effect])
+  const ownId = customId(layer.effect)
   const setParam = (key: string, value: number | string | boolean) =>
     editLayer(look.id, layer.id, { params: { ...layer.params, [key]: value } }, `param-${layer.id}-${key}`)
 
@@ -353,7 +357,20 @@ function LayerEditor({ look, layer }: { look: Look; layer: Layer }) {
               {e.name}
             </button>
           ))}
+          {custom.map((e) => (
+            <button key={e.id} className={`own${customKey(e.id) === layer.effect ? ' on' : ''}`} title="One of your own effects" onClick={() => changeEffect(customKey(e.id))}>
+              {e.name}
+            </button>
+          ))}
         </div>
+        {ownId !== null && (
+          <p className="summary">
+            {def ? 'One of your own effects. ' : 'This effect no longer exists, so the layer stays dark. '}
+            <button className="link-button" onClick={() => set({ view: 'effects', ...(def ? { effectId: ownId } : {}) })}>
+              {def ? 'Edit its curves' : 'Open the Effects tab'}
+            </button>
+          </p>
+        )}
         {layer.effect === 'image' && <ImageSource look={look} layer={layer} />}
         <div className="params">
           {def?.params.map((p) => {
@@ -487,6 +504,8 @@ export function LookEditor() {
   const fixtures = useStore((s) => s.show.fixtures)
   const groups = useStore((s) => s.show.groups)
   const folders = useStore((s) => s.show.lookFolders)
+  const custom = useStore((s) => s.show.effects)
+  const effectName = (effect: string) => EFFECT_BY_ID.get(effect)?.name ?? custom.find((e) => e.id === customId(effect))?.name ?? 'Missing effect'
   const inFolder = (l: Look) => (folders.some((f) => f.id === l.folder) ? l.folder! : '')
 
   if (!look) {
@@ -611,7 +630,7 @@ export function LookEditor() {
             }
             return (
               <li key={y.id} className={`row layer-row${y.id === layer?.id ? ' on' : ''}`} onClick={() => selectLayer(y.id)}>
-                <span className="row-name">{EFFECT_BY_ID.get(y.effect)?.name ?? y.effect}</span>
+                <span className="row-name">{effectName(y.effect)}</span>
                 <span className="row-meta">{targetSummary(y)}</span>
                 <button className="icon subtle" title="Move up" disabled={index === look.layers.length - 1} onClick={(e) => (e.stopPropagation(), swap(index + 1))}>
                   <ArrowUp size={13} />

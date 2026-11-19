@@ -29,6 +29,9 @@ unicast Art-Net is blocked by the system.
   A MIDI note plays a look ("Learn from MIDI" assigns it). The list can be searched (name or note, Cmd/Ctrl+F)
   and sorted into folders by drag and drop.
   The Image effect lays a picture over the fixtures and can move, spin and zoom it.
+- **Effects**: build your own effects. Draw a curve and let it drive brightness or colour (through a gradient),
+  over time or along the pixels, in seconds or in beats of the MIDI clock. Own effects appear next to the built-in
+  ones in every layer.
 - **Chasers**: run looks one after the other in tempo (beats and bpm), started by a MIDI note. A chaser can follow
   the MIDI clock of the DAW instead of a fixed tempo; switch on sending clock for the HeavyLight output there.
 - **Live**: pads for every look, master, blackout, MIDI monitor and timing measurements.

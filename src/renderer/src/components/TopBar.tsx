@@ -7,6 +7,7 @@ import { noteName, TextInput } from './ui'
 const VIEWS: { id: View; label: string; hint: string }[] = [
   { id: 'stage', label: 'Stage', hint: 'Fixtures and where they stand' },
   { id: 'looks', label: 'Looks', hint: 'Build what the lights do' },
+  { id: 'effects', label: 'Effects', hint: 'Build your own effects from curves' },
   { id: 'chasers', label: 'Chasers', hint: 'Run looks one after the other, in tempo' },
   { id: 'live', label: 'Live', hint: 'Play the show' }
 ]
