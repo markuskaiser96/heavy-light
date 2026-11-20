@@ -10,7 +10,7 @@ Status: proof of concept.
 ### Clone the repository
 
 1. Install git from here: https://git-scm.com/
-2. Clone the repository: `git clone https://github.com/yourusername/heavy-light.git`
+2. Clone the repository: `git clone https://github.com/markuskaiser96/heavy-light.git`
 
 ### Install node.js
 
