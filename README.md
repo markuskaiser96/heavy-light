@@ -5,14 +5,24 @@ with a 3D stage that shows what the rig is doing. Runs on macOS, Windows and Lin
 
 Status: proof of concept.
 
-## Run
+## How to use
+
+### Clone the repository
+
+1. Install git from here: https://git-scm.com/
+2. Clone the repository: `git clone https://github.com/yourusername/heavy-light.git`
+
+### Install node.js
+
+Install node.js from here: https://nodejs.org/en/download/.
+
+### Run
+
+Navigate into the project root folder and run the following commands:
 
 ```
 npm install
-npm run dev        # start with hot reload
-npm run build && npm start
-npm test           # engine, Art-Net, fixture and effect tests
-npm run typecheck
+npm start        
 ```
 
 On macOS start it from a terminal app that has the "Local Network" permission, otherwise
