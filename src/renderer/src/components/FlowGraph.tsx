@@ -13,14 +13,91 @@ const snap = (v: number): number => Math.round(v / GRID) * GRID
 const outOf = (n: FlowNode, nameOf: NameOf): [number, number] => [n.x + nodeWidth(n, nameOf), n.y + NODE_H / 2]
 const into = (n: FlowNode): [number, number] => [n.x, n.y + NODE_H / 2]
 
-/** The line of an arrow. One that leads back (a loop) swings out below the nodes so it does not run through them. */
+/** The line of an arrow that leads on to the right: a soft S. Also used while an arrow is being drawn. */
 function arrowPath([x1, y1]: [number, number], [x2, y2]: [number, number]): string {
-  if (x2 >= x1 + 24) {
-    const d = Math.max(36, (x2 - x1) / 2)
-    return `M${x1} ${y1} C${x1 + d} ${y1} ${x2 - d} ${y2} ${x2} ${y2}`
+  const d = Math.max(36, Math.abs(x2 - x1) / 2)
+  return `M${x1} ${y1} C${x1 + d} ${y1} ${x2 - d} ${y2} ${x2} ${y2}`
+}
+
+/** A line through these points with rounded corners. */
+function rounded(points: [number, number][], radius = 12): string {
+  let d = `M${points[0][0]} ${points[0][1]}`
+  for (let i = 1; i < points.length - 1; i++) {
+    const [px, py] = points[i - 1]
+    const [x, y] = points[i]
+    const [nx, ny] = points[i + 1]
+    const before = Math.hypot(x - px, y - py)
+    const after = Math.hypot(nx - x, ny - y)
+    // No more than half of either leg, so two corners in a row never overlap.
+    const r = Math.min(radius, before / 2, after / 2)
+    if (r < 0.5) {
+      d += ` L${x} ${y}`
+      continue
+    }
+    d += ` L${x + ((px - x) / before) * r} ${y + ((py - y) / before) * r} Q${x} ${y} ${x + ((nx - x) / after) * r} ${y + ((ny - y) / after) * r}`
   }
-  const drop = Math.max(y1, y2) + NODE_H / 2 + 34 + Math.min(60, (x1 - x2) / 12)
-  return `M${x1} ${y1} C${x1 + 70} ${y1} ${x1 + 70} ${drop} ${x1 - 10} ${drop} L${x2 + 10} ${drop} C${x2 - 70} ${drop} ${x2 - 70} ${y2} ${x2} ${y2}`
+  const last = points[points.length - 1]
+  return `${d} L${last[0]} ${last[1]}`
+}
+
+const LANE = 14
+const CLEAR = 26
+
+/**
+ * The lines of all arrows. Arrows that lead back (loops) run around the nodes instead of through
+ * them: out to the right, along a lane above or below everything in between, and in from the left.
+ * Arrows back to the same node share one lane and join like branches of a tree, so many of them
+ * read as "all of these lead back there"; arrows to different nodes get lanes of their own.
+ */
+function routeArrows(chaser: Chaser, nameOf: NameOf): Map<string, string> {
+  const boxes = new Map(chaser.nodes.map((n) => [n.id, { l: n.x, r: n.x + nodeWidth(n, nameOf), t: n.y, b: n.y + NODE_H, mid: n.y + NODE_H / 2 }]))
+  const paths = new Map<string, string>()
+  const back = new Map<string, string[]>()
+  for (const l of chaser.links) {
+    const a = boxes.get(l.from)
+    const b = boxes.get(l.to)
+    if (!a || !b) continue
+    if (b.l >= a.r + 24) paths.set(`${l.from}>${l.to}`, arrowPath([a.r, a.mid], [b.l, b.mid]))
+    else back.set(l.to, [...(back.get(l.to) ?? []), l.from])
+  }
+
+  const all = [...boxes.values()]
+  let below = 0
+  let above = 0
+  // Left to right, so the lanes come out the same every time.
+  for (const [to, sources] of [...back].sort((x, y) => boxes.get(x[0])!.l - boxes.get(y[0])!.l || boxes.get(x[0])!.t - boxes.get(y[0])!.t)) {
+    const target = boxes.get(to)!
+    const from = sources.map((id) => boxes.get(id)!)
+    const right = Math.max(...from.map((f) => f.r))
+    // Everything the lane has to pass: the nodes between the target and the furthest source.
+    const between = all.filter((n) => n.r > target.l - 40 && n.l < right + 40)
+    const bottom = Math.max(...between.map((n) => n.b))
+    const top = Math.min(...between.map((n) => n.t))
+    const ys = [target.mid, ...from.map((f) => f.mid)]
+    const middle = ys.reduce((sum, y) => sum + y, 0) / ys.length
+    // The shorter way round.
+    const under = bottom - middle <= middle - top
+    const lane = under ? bottom + CLEAR + below++ * LANE : top - CLEAR - above++ * LANE
+
+    /** Moves an upright piece of line sideways until it runs past all nodes between two heights. */
+    const clear = (x: number, y1: number, y2: number, dir: 1 | -1): number => {
+      const lo = Math.min(y1, y2)
+      const hi = Math.max(y1, y2)
+      for (let pass = 0; pass < 8; pass++) {
+        const hit = all.find((n) => n.t < hi && n.b > lo && n.l - 10 < x && n.r + 10 > x)
+        if (!hit) break
+        x = dir > 0 ? hit.r + 22 : hit.l - 22
+      }
+      return x
+    }
+    const inX = clear(target.l - 24, lane, target.mid, -1)
+    for (const id of sources) {
+      const f = boxes.get(id)!
+      const outX = clear(f.r + 22, f.mid, lane, 1)
+      paths.set(`${id}>${to}`, rounded([[f.r, f.mid], [outX, f.mid], [outX, lane], [inX, lane], [inX, target.mid], [target.l, target.mid]]))
+    }
+  }
+  return paths
 }
 
 /** The node new things are set down next to: the selected one, else where the flow ends, else its start. */
@@ -126,6 +203,7 @@ export function FlowGraph() {
   }
 
   const byId = new Map(chaser.nodes.map((n) => [n.id, n]))
+  const lines = routeArrows(chaser, nameOf)
   /** Pointer position in the coordinates of the chart. */
   const toWorld = (e: { clientX: number; clientY: number }): [number, number] => {
     const r = box.current!.getBoundingClientRect()
@@ -265,10 +343,8 @@ export function FlowGraph() {
               </marker>
             </defs>
             {chaser.links.map((l) => {
-              const a = byId.get(l.from)
-              const b = byId.get(l.to)
-              if (!a || !b) return null
-              const d = arrowPath(outOf(a, nameOf), into(b))
+              const d = lines.get(`${l.from}>${l.to}`)
+              if (!d) return null
               const on = pickedLink?.from === l.from && pickedLink.to === l.to
               return (
                 <g key={`${l.from}>${l.to}`} className={`flow-link${on ? ' on' : ''}`}>
