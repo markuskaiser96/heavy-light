@@ -1,12 +1,13 @@
 import { ArrowDown, ArrowUp, Copy, Eye, EyeOff, ImagePlus, Plus, Trash2 } from 'lucide-react'
 import { Fragment, useMemo, useRef } from 'react'
-import { customId, customKey, resolveEffect } from '@shared/custom'
-import { defaultParams, EFFECT_BY_ID, EFFECTS } from '@shared/effects'
+import { customId, resolveEffect } from '@shared/custom'
+import { defaultParams, EFFECT_BY_ID } from '@shared/effects'
 import { LOOK_COLORS, newId, newLayer, newLook } from '@shared/show'
 import type { Blend, Layer, Look, Mapping, Show, Triggerable } from '@shared/types'
 import { autoPlane, resolveTargets } from '@shared/patch'
 import { imageUrl, loadImageFile } from '../images'
 import { editLayer, editLook, useStore } from '../store'
+import { EffectPicker } from './EffectPicker'
 import { folderIn, ItemList } from './ItemList'
 import { lookReplay, useReplay } from './replay'
 import { SaveBar } from './SaveBar'
@@ -199,18 +200,7 @@ function LayerEditor({ look, layer }: { look: Look; layer: Layer }) {
   return (
     <>
       <Section title="Effect">
-        <div className="effects">
-          {EFFECTS.map((e) => (
-            <button key={e.id} className={e.id === layer.effect ? 'on' : ''} title={e.hint} onClick={() => changeEffect(e.id)}>
-              {e.name}
-            </button>
-          ))}
-          {custom.map((e) => (
-            <button key={e.id} className={`own${customKey(e.id) === layer.effect ? ' on' : ''}`} title="One of your own effects" onClick={() => changeEffect(customKey(e.id))}>
-              {e.name}
-            </button>
-          ))}
-        </div>
+        <EffectPicker value={layer.effect} onChange={changeEffect} />
         {ownId !== null && (
           <p className="summary">
             {def ? 'One of your own effects. ' : 'This effect no longer exists, so the layer stays dark. '}
@@ -231,7 +221,21 @@ function LayerEditor({ look, layer }: { look: Look; layer: Layer }) {
                 ) : (
                   <Field label={p.label} wide>
                     {p.type === 'color' ? (
-                      <ColorInput value={String(v)} onChange={(c) => setParam(p.key, c)} />
+                      <>
+                        <ColorInput value={String(v)} onChange={(c) => setParam(p.key, c)} />
+                        {ownId !== null && typeof layer.params[p.key] === 'string' && (
+                          <button
+                            className="link-button reset-colour"
+                            title="This layer has its own colour. Go back to the colour of the effect, and follow it when it changes."
+                            onClick={() => {
+                              const { [p.key]: _, ...rest } = layer.params
+                              editLayer(look.id, layer.id, { params: rest })
+                            }}
+                          >
+                            Use the colour of the effect
+                          </button>
+                        )}
+                      </>
                     ) : p.type === 'select' ? (
                       <Select value={String(v)} onChange={(o) => setParam(p.key, o)} options={p.options} />
                     ) : (

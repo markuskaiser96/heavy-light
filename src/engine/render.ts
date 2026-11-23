@@ -1,6 +1,7 @@
 import { customKey, resolveEffect } from '@shared/custom'
 import { makeDraw, seedOf } from '@shared/random'
-import { prepareParams, type EffectDef, type RenderArgs } from '@shared/effects'
+import { defaultParams, prepareParams, type EffectDef, type RenderArgs } from '@shared/effects'
+import { presetId } from '@shared/presets'
 import { imagePixels } from '@shared/images'
 import { mapImage, mapLayer, type Patch } from '@shared/patch'
 import type { Blend, Layer, Mapping, Show } from '@shared/types'
@@ -70,9 +71,10 @@ export class LookRenderer {
     return { def, cells, blend: layer.blend, opacity: Math.min(1, Math.max(0, layer.opacity)), args, owner, pick }
   }
 
-  /** Puts one custom effect on every fixture, to be shown as EFFECT_PREVIEW. null clears it. */
+  /** Puts one custom effect, or a preset (`preset:<id>`) with its default settings, on every fixture, to be shown as EFFECT_PREVIEW. null clears it. */
   previewEffect(id: string | null, mapping: Mapping): void {
-    const layer = id === null ? null : this.compile({ id: EFFECT_PREVIEW, effect: customKey(id), params: {}, targets: [], mapping, blend: 'normal', opacity: 1 })
+    const effect = id === null ? '' : (presetId(id) ?? customKey(id))
+    const layer = id === null ? null : this.compile({ id: EFFECT_PREVIEW, effect, params: defaultParams(effect), targets: [], mapping, blend: 'normal', opacity: 1 })
     this.layers.set(EFFECT_PREVIEW, layer ? [layer] : [])
   }
 

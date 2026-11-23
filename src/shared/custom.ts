@@ -1,6 +1,6 @@
 import { EFFECT_BY_ID, parseColor, type EffectDef, type ParamDef, type RGB } from './effects'
 import { hash01, seedOf } from './random'
-import type { Curve, CurveDrive, CustomEffect, GradientStop, ParamValue } from './types'
+import type { Curve, CurveDrive, CurveStack, CustomEffect, ExtraCurve, GradientStop, ParamValue } from './types'
 
 /**
  * Effects the user builds: brightness and colour, each either fixed or read from a drawn curve.
@@ -126,9 +126,27 @@ function normalizeDrive(raw: Partial<CurveDrive> | undefined, base: CurveDrive):
     hz: number(raw?.hz, base.hz, 0, 30),
     beats: number(raw?.beats, base.beats, MIN_BEATS, 64),
     direction: oneOf(raw?.direction, ['forward', 'backward', 'bounce', 'random'], base.direction),
-    once: raw?.once === true
+    once: raw?.once === true,
+    ...(raw?.scatter === 'pixel' || raw?.scatter === 'fixture' ? { scatter: raw.scatter, ...(typeof raw.chance === 'number' && raw.chance < 1 ? { chance: number(raw.chance, 1, 0.01, 1) } : {}) } : {})
   }
 }
+
+/** Most curves one channel can combine. */
+export const MAX_CURVES = 4
+
+function normalizeStack(raw: Partial<CurveStack> | undefined, base: CurveDrive): CurveStack {
+  const more = (Array.isArray(raw?.more) ? raw.more : []).slice(0, MAX_CURVES - 1).map(
+    (m): ExtraCurve => ({ drive: normalizeDrive(m?.drive, base), mix: oneOf(m?.mix, ['add', 'multiply', 'max'], 'add'), amount: number(m?.amount, 1, 0, 1) })
+  )
+  return {
+    drive: normalizeDrive(raw?.drive, base),
+    ...(typeof raw?.amount === 'number' && raw.amount < 1 ? { amount: number(raw.amount, 1, 0, 1) } : {}),
+    ...(more.length ? { more } : {})
+  }
+}
+
+/** Every curve of a channel, the first one first. */
+export const drivesOf = (stack: CurveStack): CurveDrive[] => [stack.drive, ...(stack.more ?? []).map((m) => m.drive)]
 
 /** Fills in whatever a file lacks or got wrong, so the renderer can rely on every field. */
 export function normalizeEffect(raw: Partial<CustomEffect>): CustomEffect {
@@ -141,14 +159,15 @@ export function normalizeEffect(raw: Partial<CustomEffect>): CustomEffect {
     brightness: {
       mode: oneOf(raw.brightness?.mode, ['fixed', 'curve'], base.brightness.mode),
       value: number(raw.brightness?.value, base.brightness.value, 0, 1),
-      drive: normalizeDrive(raw.brightness?.drive, base.brightness.drive)
+      ...normalizeStack(raw.brightness, base.brightness.drive)
     },
     colour: {
       mode: oneOf(raw.colour?.mode, ['fixed', 'curve'], base.colour.mode),
       color: isColor(raw.colour?.color) ? raw.colour.color : base.colour.color,
       gradient: stops.length ? stops.sort((a, b) => a.at - b.at) : base.colour.gradient,
-      drive: normalizeDrive(raw.colour?.drive, base.colour.drive)
-    }
+      ...normalizeStack(raw.colour, base.colour.drive)
+    },
+    ...(isColor(raw.background) && raw.background !== '#000000' ? { background: raw.background } : {})
   }
 }
 
@@ -159,16 +178,34 @@ export function normalizeEffect(raw: Partial<CustomEffect>): CustomEffect {
 export function oneShotSeconds(effect: CustomEffect, bpm: number): number | null {
   let longest: number | null = null
   for (const channel of [effect.brightness, effect.colour]) {
-    const d = channel.drive
-    if (channel.mode !== 'curve' || !d.once || (d.direction === 'random' && d.over === 'position')) continue
-    const pass = d.sync === 'beats' ? (d.beats * 60) / Math.max(1, bpm) : d.hz > 0 ? 1 / d.hz : 0
-    longest = Math.max(longest ?? 0, pass * (d.direction === 'bounce' ? 2 : 1))
+    if (channel.mode !== 'curve') continue
+    for (const d of drivesOf(channel)) {
+      if (!d.once || (d.direction === 'random' && d.over === 'position')) continue
+      const pass = d.sync === 'beats' ? (d.beats * 60) / Math.max(1, bpm) : d.hz > 0 ? 1 / d.hz : 0
+      longest = Math.max(longest ?? 0, pass * (d.direction === 'bounce' ? 2 : 1))
+    }
   }
   return longest
 }
 
-/** What a layer can still set on a custom effect. */
+/** What a layer can set on every custom effect. Its colours come on top, see `layerParams`. */
 const LAYER_PARAMS: ParamDef[] = [{ key: 'speed', label: 'Speed', type: 'number', default: 1, min: 0.1, max: 8, step: 0.05, unit: '×' }]
+
+/** Parameter of a layer that replaces the n-th colour of the gradient. */
+const stopKey = (index: number): string => `stop${index + 1}`
+
+/**
+ * What a layer can set on this effect: its speed, and each of its colours. The colours default to the
+ * effect's own, so a layer that sets none follows the effect when its colours change.
+ */
+export function layerParams(effect: CustomEffect): ParamDef[] {
+  const { colour, background } = effect
+  const colours: ParamDef[] =
+    colour.mode === 'fixed'
+      ? [{ key: 'color', label: 'Colour', type: 'color', default: colour.color }]
+      : colour.gradient.map((s, i): ParamDef => ({ key: stopKey(i), label: `Gradient colour ${i + 1}`, type: 'color', default: s.color }))
+  return [...LAYER_PARAMS, ...colours, ...(background ? [{ key: 'background', label: 'Background', type: 'color', default: background } as ParamDef] : [])]
+}
 
 /** Beats per second assumed when nobody counts beats (a preview outside the engine). */
 const FALLBACK_BEATS = 2
@@ -203,6 +240,25 @@ function runDrive(drive: CurveDrive, { values: table, from, to }: Table, out: Fl
   const random = drive.direction === 'random' && drive.over === 'position'
   const back = drive.direction === 'backward'
   const bounce = drive.direction === 'bounce'
+  if (drive.over === 'time' && drive.scatter) {
+    // Every pixel (or fixture) is somewhere else in the pass, and only some of them take part in each pass.
+    const chance = drive.chance ?? 1
+    const perPixel = drive.scatter === 'pixel'
+    for (let i = 0; i < count; i++) {
+      const who = perPixel ? i : owner ? owner[i] : 0
+      // Once: all start with the note, so only the draw of who takes part is left to chance.
+      const r = drive.once ? Math.min(bounce ? 2 : 1, run) : run + (moving ? hash01(who, seed + 101) : 0)
+      const pass = drive.once ? 0 : Math.floor(r)
+      if (chance < 1 && hash01(who * 31 + pass, seed + 211) >= chance) {
+        out[i] = 0
+        continue
+      }
+      const f = drive.once && !bounce ? r : frac(r)
+      const x = !moving ? hash01(who, seed + 101) : bounce ? 1 - Math.abs(2 * frac(r / 2) - 1) : back ? 1 - f : f
+      out[i] = read(table, x)
+    }
+    return
+  }
   if (random) {
     // A new place on every pass, and another one on each fixture. A curve that is dark at its ends
     // (a section, a dot) stays whole on the pixels; one that is not wraps around.
@@ -249,45 +305,115 @@ function runDrive(drive: CurveDrive, { values: table, from, to }: Table, out: Fl
 
 const GRADIENT = 256
 
+interface Part {
+  drive: CurveDrive
+  table: Table
+  mix: ExtraCurve['mix']
+  amount: number
+}
+
+const partsOf = (stack: CurveStack): Part[] => [
+  { drive: stack.drive, table: tableOf(stack.drive.curve), mix: 'add', amount: stack.amount ?? 1 },
+  ...(stack.more ?? []).map((m): Part => ({ drive: m.drive, table: tableOf(m.drive.curve), mix: m.mix, amount: m.amount }))
+]
+
+/** Reads all curves of a channel and combines them into `out` (0..1). `scratch` holds one curve at a time. */
+function runStack(parts: Part[], out: Float32Array, scratch: Float32Array, pixels: Pixels, t: number, beat: number, speed: number, seed: number): void {
+  const { count } = pixels
+  for (let n = 0; n < parts.length; n++) {
+    const { drive, table, mix, amount } = parts[n]
+    runDrive(drive, table, n === 0 ? out : scratch, pixels, t, beat, speed, seed + n * 17)
+    if (n === 0) {
+      if (amount !== 1) for (let i = 0; i < count; i++) out[i] *= amount
+    } else if (mix === 'add') for (let i = 0; i < count; i++) out[i] = Math.min(1, out[i] + scratch[i] * amount)
+    else if (mix === 'max') for (let i = 0; i < count; i++) out[i] = Math.max(out[i], scratch[i] * amount)
+    else for (let i = 0; i < count; i++) out[i] *= 1 - amount + amount * scratch[i]
+  }
+}
+
+const rgbOf = (v: unknown, fallback: RGB): RGB => (Array.isArray(v) ? (v as RGB) : fallback)
+
 /** Turns a custom effect into the same kind of effect the built-in ones are. */
 export function compileCustom(effect: CustomEffect): EffectDef {
   const { brightness, colour } = effect
-  const levelTable = brightness.mode === 'curve' ? tableOf(brightness.drive.curve) : null
-  const colourTable = colour.mode === 'curve' ? tableOf(colour.drive.curve) : null
+  const levelParts = brightness.mode === 'curve' ? partsOf(brightness) : null
+  const colourParts = colour.mode === 'curve' ? partsOf(colour) : null
   const seed = seedOf(effect.id)
-  const fixed: RGB = parseColor(colour.color)
+  const ownColour = parseColor(colour.color)
+  const ownBackground = effect.background ? parseColor(effect.background) : null
+  const ownStops = colour.gradient.map((s) => parseColor(s.color))
   const ramp = new Float32Array((GRADIENT + 1) * 3)
-  if (colourTable) for (let i = 0; i <= GRADIENT; i++) gradientAt(colour.gradient, i / GRADIENT, ramp, i * 3)
+  /** The parameters the ramp was last built for: a layer can replace the colours of the gradient. */
+  let rampFor: unknown = null
+  const buildRamp = (p: Record<string, unknown>) => {
+    const stops = colour.gradient.map((s, i) => ({ at: s.at, rgb: rgbOf(p[stopKey(i)], ownStops[i]) }))
+    for (let g = 0; g <= GRADIENT; g++) {
+      const at = g / GRADIENT
+      let a = stops[0]
+      let b = stops[stops.length - 1]
+      if (at <= a.at) b = a
+      else if (at >= b.at) a = b
+      else
+        for (let i = 1; i < stops.length; i++)
+          if (at < stops[i].at) {
+            a = stops[i - 1]
+            b = stops[i]
+            break
+          }
+      const f = b.at > a.at ? (at - a.at) / (b.at - a.at) : 0
+      for (let k = 0; k < 3; k++) ramp[g * 3 + k] = a.rgb[k] + (b.rgb[k] - a.rgb[k]) * f
+    }
+  }
   let level = new Float32Array(0)
   let hue = new Float32Array(0)
+  let scratch = new Float32Array(0)
 
   return {
     id: customKey(effect.id),
     name: effect.name,
     hint: 'Your own effect',
-    params: LAYER_PARAMS,
+    params: layerParams(effect),
     render({ out, u, count, t, beat, p, owner }) {
       if (level.length < count) {
         level = new Float32Array(count)
         hue = new Float32Array(count)
+        scratch = new Float32Array(count)
       }
       const speed = typeof p.speed === 'number' ? p.speed : 1
       const beats = beat ?? t * FALLBACK_BEATS
       const pixels = { u, count, owner }
-      if (levelTable) runDrive(brightness.drive, levelTable, level, pixels, t, beats, speed, seed)
-      if (colourTable) runDrive(colour.drive, colourTable, hue, pixels, t, beats, speed, seed + 1)
+      if (levelParts) runStack(levelParts, level, scratch, pixels, t, beats, speed, seed)
+      if (colourParts) {
+        runStack(colourParts, hue, scratch, pixels, t, beats, speed, seed + 1)
+        if (rampFor !== p) {
+          buildRamp(p)
+          rampFor = p
+        }
+      }
+      const fixed = rgbOf(p.color, ownColour)
+      const bg = ownBackground && rgbOf(p.background, ownBackground)
       for (let i = 0; i < count; i++) {
-        const l = levelTable ? level[i] : brightness.value
+        const l = levelParts ? level[i] : brightness.value
         const o = i * 3
-        if (colourTable) {
+        let r = fixed[0]
+        let g = fixed[1]
+        let b = fixed[2]
+        if (colourParts) {
           const at = hue[i] * GRADIENT
-          const g = Math.min(GRADIENT - 1, at | 0)
-          const f = at - g
-          for (let k = 0; k < 3; k++) out[o + k] = (ramp[g * 3 + k] + (ramp[g * 3 + 3 + k] - ramp[g * 3 + k]) * f) * l
+          const n = Math.min(GRADIENT - 1, at | 0) * 3
+          const f = at - n / 3
+          r = ramp[n] + (ramp[n + 3] - ramp[n]) * f
+          g = ramp[n + 1] + (ramp[n + 4] - ramp[n + 1]) * f
+          b = ramp[n + 2] + (ramp[n + 5] - ramp[n + 2]) * f
+        }
+        if (bg) {
+          out[o] = bg[0] + (r - bg[0]) * l
+          out[o + 1] = bg[1] + (g - bg[1]) * l
+          out[o + 2] = bg[2] + (b - bg[2]) * l
         } else {
-          out[o] = fixed[0] * l
-          out[o + 1] = fixed[1] * l
-          out[o + 2] = fixed[2] * l
+          out[o] = r * l
+          out[o + 1] = g * l
+          out[o + 2] = b * l
         }
       }
     }

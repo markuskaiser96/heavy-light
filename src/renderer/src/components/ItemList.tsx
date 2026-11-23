@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Folder as FolderIcon, FolderOpen, FolderPlus, Pencil, Search, Trash2, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, Folder as FolderIcon, FolderOpen, FolderPlus, Lock, Pencil, Search, Trash2, X } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { newId } from '@shared/show'
 import type { Folder, FolderList } from '@shared/types'
@@ -31,7 +31,8 @@ export function ItemList<T extends Listed>({
   meta,
   action,
   empty,
-  alsoChanged
+  alsoChanged,
+  fixed
 }: {
   kind: ItemKind
   folderList: FolderList
@@ -52,6 +53,8 @@ export function ItemList<T extends Listed>({
   /** The "New …" button. */
   action: ReactNode
   empty: string
+  /** A folder that comes with the app: listed last, its entries can be selected but not moved, renamed or removed. */
+  fixed?: { id: string; name: string; items: Listed[]; lead: (item: Listed) => ReactNode; meta: (item: Listed) => ReactNode }
 }) {
   const folders = useStore((s) => s.show[folderList])
   const closed = useStore((s) => s.closedFolders)
@@ -136,7 +139,10 @@ export function ItemList<T extends Listed>({
   const filed = folders.map((folder) => ({ folder, list: shown(folder) })).filter((x) => !query || x.list.length > 0 || x.folder.name.toLowerCase().includes(query))
   const isOpen = (folder: Folder) => query !== '' || !closed.includes(folder.id)
   const visible = [...loose, ...filed.flatMap((x) => (isOpen(x.folder) ? x.list : []))].map((i) => i.id)
-  const nothing = query !== '' && loose.length === 0 && filed.length === 0
+  const fixedShown = !fixed ? [] : !query || fixed.name.toLowerCase().includes(query) ? fixed.items : fixed.items.filter((i) => i.name.toLowerCase().includes(query))
+  const fixedOpen = !!fixed && (query !== '' || !closed.includes(fixed.id))
+  const nothing = query !== '' && loose.length === 0 && filed.length === 0 && fixedShown.length === 0
+  const toggleFolder = (id: string) => set({ closedFolders: closed.includes(id) ? closed.filter((c) => c !== id) : [...closed, id] })
 
   const rows = (list: T[]) => (
     <ul className="list">
@@ -175,7 +181,7 @@ export function ItemList<T extends Listed>({
       }
     >
       {items.length === 0 && folders.length === 0 && <p className="empty">{empty}</p>}
-      {items.length > 0 && (
+      {items.length + (fixed?.items.length ?? 0) > 0 && (
         <div className="search">
           <Search size={14} />
           <input
@@ -220,7 +226,7 @@ export function ItemList<T extends Listed>({
                 className="folder-toggle"
                 aria-expanded={open}
                 title={open ? 'Collapse' : 'Expand'}
-                onClick={() => set({ closedFolders: closed.includes(folder.id) ? closed.filter((id) => id !== folder.id) : [...closed, folder.id] })}
+                onClick={() => toggleFolder(folder.id)}
               >
                 {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 {open ? <FolderOpen size={14} /> : <FolderIcon size={14} />}
@@ -255,6 +261,35 @@ export function ItemList<T extends Listed>({
           </div>
         )
       })}
+
+      {fixed && (!query || fixedShown.length > 0) && (
+        <div className="look-group folder">
+          <div className="row folder-row">
+            <button className="folder-toggle" aria-expanded={fixedOpen} title={fixedOpen ? 'Collapse' : 'Expand'} onClick={() => toggleFolder(fixed.id)}>
+              {fixedOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              {fixedOpen ? <FolderOpen size={14} /> : <FolderIcon size={14} />}
+            </button>
+            <span className="row-name">{fixed.name}</span>
+            <span className="row-meta">{fixed.items.length}</span>
+            <span className="folder-lock" title={`Comes with HeavyLight: these ${title.toLowerCase()} cannot be changed or deleted`}>
+              <Lock size={12} />
+            </span>
+          </div>
+          {fixedOpen && (
+            <ul className="list">
+              {fixedShown.map((item) => (
+                <li key={item.id}>
+                  <button className={`row item-row${selected.includes(item.id) ? ' on' : ''}`} onClick={(e) => onSelect(item.id, e, visible)}>
+                    {fixed.lead(item)}
+                    <span className="row-name">{item.name}</span>
+                    <span className="row-meta">{fixed.meta(item)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </Section>
   )
 }

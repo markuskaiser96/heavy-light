@@ -128,6 +128,30 @@ export interface CurveDrive {
    * Over position, the curve then passes through once: it comes in at one end and leaves at the other.
    */
   once: boolean
+  /**
+   * Time only: instead of all pixels following the curve together, every pixel (or every fixture) is at
+   * its own random point of the pass. Absent = together.
+   */
+  scatter?: 'pixel' | 'fixture'
+  /** With `scatter`: the share of pixels (or fixtures) that take part in each pass, drawn anew every pass. The others stay at 0. Absent = all. */
+  chance?: number
+}
+
+/** One more curve on a channel, combined with the result of the curves before it. */
+export interface ExtraCurve {
+  drive: CurveDrive
+  /** add: summed up. multiply: scales what is there. max: the higher one wins. */
+  mix: 'add' | 'multiply' | 'max'
+  /** How much it counts, 0..1. */
+  amount: number
+}
+
+/** What every curve-driven channel has: its first curve, how much that counts, and further curves on top. */
+export interface CurveStack {
+  drive: CurveDrive
+  /** How much the first curve counts, 0..1. Absent = fully. */
+  amount?: number
+  more?: ExtraCurve[]
 }
 
 export interface GradientStop {
@@ -142,9 +166,11 @@ export interface CustomEffect {
   name: string
   /** Id of the folder it is filed in. Absent = not in a folder. Folders only organise the list. */
   folder?: string
-  brightness: { mode: 'fixed' | 'curve'; value: number; drive: CurveDrive }
+  brightness: { mode: 'fixed' | 'curve'; value: number } & CurveStack
   /** With a curve, the curve picks the place on the gradient: low = its start, high = its end. */
-  colour: { mode: 'fixed' | 'curve'; color: string; gradient: GradientStop[]; drive: CurveDrive }
+  colour: { mode: 'fixed' | 'curve'; color: string; gradient: GradientStop[] } & CurveStack
+  /** What shows where the brightness is low: the effect fades from this colour to its own. Absent = black. */
+  background?: string
 }
 
 export interface MidiNote {
@@ -265,7 +291,7 @@ export type ToEngine =
    * plays its looks, effects and chasers; MIDI keeps playing the saved show. null = nothing unsaved.
    */
   | { type: 'work'; show: Show | null }
-  /** `id` is a look, a chaser or `effect:<id>` for a custom effect, which is then shown on all fixtures with `mapping`. */
+  /** `id` is a look, a chaser or `effect:<id>` for a custom effect or `effect:preset:<id>` for a preset, which is then shown on all fixtures with `mapping`. */
   | { type: 'preview'; id: string | null; mapping?: Mapping }
   /** Starts what is being previewed from its beginning again, as a new MIDI note would. */
   | { type: 'restartPreview' }

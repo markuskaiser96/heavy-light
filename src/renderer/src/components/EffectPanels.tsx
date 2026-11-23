@@ -1,17 +1,22 @@
-import { Copy, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
-import { useEffect, useMemo, useRef } from 'react'
-import { compileCustom, CURVE_PRESETS, customKey, evalCurve, gradientAt, MIN_BEATS, newCustomEffect, oneShotSeconds } from '@shared/custom'
-import { defaultParams } from '@shared/effects'
+import { Copy, Eye, EyeOff, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { compileCustom, CURVE_PRESETS, customKey, drivesOf, evalCurve, gradientAt, MAX_CURVES, MIN_BEATS, newCustomEffect, newDrive, oneShotSeconds } from '@shared/custom'
+import { defaultParams, prepareParams, type EffectDef, type RenderArgs } from '@shared/effects'
+import { copyPreset, presetId, presetKey, PRESETS, presetSeconds } from '@shared/presets'
 import { newId } from '@shared/show'
-import type { Curve, CurveDrive, CustomEffect, GradientStop, Mapping } from '@shared/types'
+import type { Curve, CurveDrive, CurveStack, CustomEffect, ExtraCurve, GradientStop, Mapping } from '@shared/types'
 import { editEffect, useStore } from '../store'
 import { folderIn, ItemList } from './ItemList'
 import { effectReplay, REPLAY_PAUSE, useReplay } from './replay'
 import { SaveBar } from './SaveBar'
 import { BeatLength, ColorInput, Field, NumberInput, Section, Segmented, Select, Slider, TextInput } from './ui'
 
-const usedBy = (effect: CustomEffect, looks: { layers: { effect: string }[] }[]): number =>
-  looks.reduce((n, l) => n + l.layers.filter((y) => y.effect === customKey(effect.id)).length, 0)
+/** How many layers use an effect, named as layers name it (`chase`, `custom:<id>`). */
+const usedBy = (effect: string, looks: { layers: { effect: string }[] }[]): number => looks.reduce((n, l) => n + l.layers.filter((y) => y.effect === effect).length, 0)
+const layers = (n: number): string => `${n} layer${n === 1 ? '' : 's'}`
+
+/** The presets as list entries, selected as `preset:<id>`. */
+const PRESET_ROWS = PRESETS.map((e) => ({ id: presetKey(e.id), name: e.name }))
 
 export function EffectList() {
   const effects = useStore((s) => s.show.effects)
@@ -42,10 +47,20 @@ export function EffectList() {
         onSelect={(id) => set({ effectId: id })}
         lead={(e) => <CurveIcon curve={(e.brightness.mode === 'curve' ? e.brightness : e.colour).drive.curve} />}
         meta={(e) => {
-          const n = usedBy(e, looks)
-          return n === 0 ? 'unused' : `${n} layer${n === 1 ? '' : 's'}`
+          const n = usedBy(customKey(e.id), looks)
+          return n === 0 ? 'unused' : layers(n)
         }}
-        empty="Build your own effects here: draw a curve and let it drive brightness or colour, over time or along the pixels. They then appear next to the built-in effects in every scene."
+        fixed={{
+          id: 'effect-presets',
+          name: 'Presets',
+          items: PRESET_ROWS,
+          lead: () => <Sparkles className="preset-icon" size={14} aria-hidden />,
+          meta: (e) => {
+            const n = usedBy(presetId(e.id)!, looks)
+            return n === 0 ? '' : layers(n)
+          }
+        }}
+        empty="Build your own effects here: draw a curve and let it drive brightness or colour, over time or along the pixels. Or copy a preset and change it. Every layer of a scene can use them, just like the presets."
         action={
           <button className="button small primary" onClick={add}>
             <Plus size={14} /> New effect
@@ -219,9 +234,43 @@ function DriveEditor({ drive, low, high, onChange }: { drive: CurveDrive; low: s
         </Field>
         <p className="form-note">
           {time
-            ? 'All pixels follow the curve together, from left to right.'
+            ? drive.scatter
+              ? 'The curve is read from left to right, over and over.'
+              : 'All pixels follow the curve together, from left to right.'
             : 'The curve lies along the pixels: its left end on the first pixel. How "along" is meant (each fixture, the whole stage …) is chosen per layer in the scene.'}
         </p>
+        {time && (
+          <Field label="The pixels follow it" wide>
+            <Select
+              value={drive.scatter ?? 'together'}
+              onChange={(v) => onChange(v === 'together' ? { scatter: undefined, chance: undefined } : { scatter: v })}
+              options={[
+                { value: 'together', label: 'All together' },
+                { value: 'fixture', label: 'Each fixture in its own time' },
+                { value: 'pixel', label: 'Each pixel in its own time' }
+              ]}
+            />
+          </Field>
+        )}
+        {time && drive.scatter && (
+          <>
+            <Field label="Taking part in each pass" wide>
+              <Slider
+                value={drive.chance ?? 1}
+                min={0.01}
+                max={1}
+                step={0.01}
+                format={(v) => (v >= 1 ? 'All' : `${Math.round(v * 100)}%`)}
+                onChange={(chance) => onChange({ chance: chance >= 1 ? undefined : chance }, 'chance')}
+              />
+            </Field>
+            <p className="form-note">
+              {drive.once
+                ? `On every note, chance decides which ${drive.scatter === 'pixel' ? 'pixels' : 'fixtures'} run through the curve. The others stay at the bottom of it.`
+                : `Every ${drive.scatter === 'pixel' ? 'pixel' : 'fixture'} is at a different point of the curve, and on each pass chance decides anew which of them take part. The others stay at the bottom of it. A curve that starts high and falls gives a sparkle.`}
+            </p>
+          </>
+        )}
         {!time && (
           <Field label="Fits along">
             <NumberInput value={drive.repeats} min={0.1} max={32} step={0.25} unit="×" onChange={(repeats) => onChange({ repeats }, 'repeats')} />
@@ -287,6 +336,79 @@ function DriveEditor({ drive, low, high, onChange }: { drive: CurveDrive; low: s
   )
 }
 
+const MIXES: { value: ExtraCurve['mix']; label: string }[] = [
+  { value: 'add', label: 'Added to the curves before' },
+  { value: 'multiply', label: 'Scales the curves before' },
+  { value: 'max', label: 'The higher one wins' }
+]
+
+/**
+ * The curves of one channel: the first one, and up to three more that are combined with it. One of
+ * them is open at a time. `onChange` receives the changed fields of the channel.
+ */
+function StackEditor({ stack, low, high, onChange }: { stack: CurveStack; low: string; high: string; onChange: (patch: Partial<CurveStack>, key?: string) => void }) {
+  const more = stack.more ?? []
+  const [chosen, setChosen] = useState(0)
+  const at = Math.min(chosen, more.length)
+  const extra = at > 0 ? more[at - 1] : null
+  const setExtra = (patch: Partial<ExtraCurve>, key?: string) => onChange({ more: more.map((m, i) => (i === at - 1 ? { ...m, ...patch } : m)) }, key && `more${at}-${key}`)
+  const add = () => {
+    // The new curve starts like the first one runs, as a wave at half strength.
+    onChange({ more: [...more, { drive: newDrive('sine', { over: stack.drive.over, sync: stack.drive.sync, beats: stack.drive.beats }), mix: 'add', amount: 0.5 }] })
+    setChosen(more.length + 1)
+  }
+  const remove = () => {
+    const rest = more.filter((_, i) => i !== at - 1)
+    onChange({ more: rest.length ? rest : undefined })
+    setChosen(at - 1)
+  }
+  const percent = (v: number) => `${Math.round(v * 100)}%`
+
+  return (
+    <>
+      <div className="curve-tabs" role="tablist" aria-label="Curves of this channel">
+        {drivesOf(stack).map((d, i) => (
+          <button key={i} role="tab" aria-selected={i === at} className={i === at ? 'on' : ''} onClick={() => setChosen(i)}>
+            <CurveIcon curve={d.curve} />
+            {i + 1}
+          </button>
+        ))}
+        {more.length < MAX_CURVES - 1 && (
+          <button className="add" title="Combine with one more curve, e.g. several waves of different lengths" onClick={add}>
+            <Plus size={13} /> Curve
+          </button>
+        )}
+      </div>
+      {more.length > 0 && (
+        <div className="form-grid curve-mix">
+          {extra && (
+            <Field label={`Curve ${at + 1} is`} wide>
+              <span className="with-action">
+                <Select value={extra.mix} onChange={(mix) => setExtra({ mix })} options={MIXES} />
+                <button className="icon" title="Remove this curve" onClick={remove}>
+                  <Trash2 size={14} />
+                </button>
+              </span>
+            </Field>
+          )}
+          <Field label="Counts" wide>
+            {extra ? (
+              <Slider value={extra.amount} min={0} max={1} step={0.01} format={percent} onChange={(amount) => setExtra({ amount }, 'amount')} />
+            ) : (
+              <Slider value={stack.amount ?? 1} min={0} max={1} step={0.01} format={percent} onChange={(amount) => onChange({ amount: amount >= 1 ? undefined : amount }, 'amount')} />
+            )}
+          </Field>
+        </div>
+      )}
+      {extra ? (
+        <DriveEditor key={at} drive={extra.drive} low={low} high={high} onChange={(patch, key) => setExtra({ drive: { ...extra.drive, ...patch } }, key)} />
+      ) : (
+        <DriveEditor key={0} drive={stack.drive} low={low} high={high} onChange={(patch, key) => onChange({ drive: { ...stack.drive, ...patch } }, key)} />
+      )}
+    </>
+  )
+}
+
 function GradientEditor({ stops, onChange }: { stops: GradientStop[]; onChange: (stops: GradientStop[], key?: string) => void }) {
   const sorted = (list: GradientStop[]) => [...list].sort((a, b) => a.at - b.at)
   const add = () => {
@@ -333,10 +455,12 @@ function GradientEditor({ stops, onChange }: { stops: GradientStop[]; onChange: 
 
 const PREVIEW_PIXELS = 96
 
-/** The effect running on one imaginary strip of pixels, exactly as the engine computes it. */
-function PreviewStrip({ effect }: { effect: CustomEffect }) {
+/**
+ * An effect running on one imaginary strip of pixels, exactly as the engine computes it.
+ * `once` tells how long its one-shot parts take at a tempo (null = it keeps running).
+ */
+function PreviewStrip({ def, params, once: onceAt }: { def: EffectDef; params: RenderArgs['p']; once: (bpm: number) => number | null }) {
   const canvas = useRef<HTMLCanvasElement>(null)
-  const def = useMemo(() => compileCustom(effect), [effect])
 
   useEffect(() => {
     const ctx = canvas.current?.getContext('2d')
@@ -355,12 +479,12 @@ function PreviewStrip({ effect }: { effect: CustomEffect }) {
       beat += ((now - last) / 60000) * bpm
       last = now
       // What runs once per note starts over after a short pause, so it can be judged.
-      const once = oneShotSeconds(effect, bpm)
+      const once = onceAt(bpm)
       if (once !== null && now - start > (once + REPLAY_PAUSE) * 1000) {
         start = now
         beat = 0
       }
-      def.render({ out, u, count: PREVIEW_PIXELS, t: (now - start) / 1000, beat, p: { speed: 1 } })
+      def.render({ out, u, count: PREVIEW_PIXELS, t: (now - start) / 1000, beat, p: params })
       for (let i = 0; i < PREVIEW_PIXELS; i++) {
         for (let k = 0; k < 3; k++) image.data[i * 4 + k] = Math.round(Math.min(1, Math.max(0, out[i * 3 + k])) * 255)
         image.data[i * 4 + 3] = 255
@@ -370,7 +494,7 @@ function PreviewStrip({ effect }: { effect: CustomEffect }) {
     }
     frame = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(frame)
-  }, [def, effect])
+  }, [def, params, onceAt])
 
   return <canvas ref={canvas} className="effect-strip" width={PREVIEW_PIXELS} height={1} aria-label="Preview of the effect on one strip" />
 }
@@ -383,7 +507,77 @@ const STAGE_MAPPINGS: { value: Mapping; label: string }[] = [
   { value: 'stageY', label: 'From the floor up' }
 ]
 
+const OWN_PARAMS = { speed: 1 }
+
+/** A preset: what it does and what a layer can set on it. Nothing to edit, but it can be copied. */
+function PresetView({ def }: { def: EffectDef }) {
+  const looks = useStore((s) => s.show.looks)
+  const preview = useStore((s) => s.preview)
+  const mapping = useStore((s) => s.effectMapping)
+  const set = useStore((s) => s.set)
+  const editNow = useStore((s) => s.editNow)
+  const params = useMemo(() => prepareParams(def, defaultParams(def.id)), [def])
+  const once = useMemo(() => () => presetSeconds(def.id), [def])
+  useReplay(presetSeconds(def.id))
+  const n = usedBy(def.id, looks)
+
+  const copy = () => {
+    const effect = copyPreset(def.id, newId(), `${def.name} copy`)
+    if (!effect) return
+    editNow((s) => ({ ...s, effects: [...s.effects, effect] }))
+    set({ effectId: effect.id })
+  }
+
+  return (
+    <aside className="panel right wide">
+      <Section
+        title="Preset"
+        action={
+          <span className="actions">
+            <button className={`icon${preview ? ' active' : ''}`} title={preview ? 'Shown on all fixtures. Click to hide.' : 'Show on stage'} onClick={() => set({ preview: !preview })}>
+              {preview ? <Eye size={15} /> : <EyeOff size={15} />}
+            </button>
+            <button className="icon" title="Copy to your own effects" onClick={copy}>
+              <Copy size={15} />
+            </button>
+          </span>
+        }
+      >
+        <h2 className="preset-name">{def.name}</h2>
+        <p className="summary">{def.hint}. Presets come with HeavyLight and cannot be changed or deleted.</p>
+        <PreviewStrip def={def} params={params} once={once} />
+        <div className="form-grid">
+          <Field label="On stage, try it" wide>
+            <Select value={mapping} onChange={(m) => set({ effectMapping: m })} options={STAGE_MAPPINGS} />
+          </Field>
+        </div>
+        <p className="summary">{n === 0 ? 'Not used by any layer yet. Pick it for a layer in the Scenes tab.' : `Used by ${layers(n)}.`}</p>
+      </Section>
+
+      <Section title="Set per layer">
+        <p className="summary">Each layer that uses this preset has its own settings in the scene:</p>
+        <ul className="preset-params">
+          {def.params.map((p) => (
+            <li key={p.key}>{p.label}</li>
+          ))}
+        </ul>
+      </Section>
+
+      <Section title="Make it your own">
+        <p className="summary">
+          A copy is rebuilt from curves, starting with what you see above, and you can change every part of it. Its shape then belongs to the effect: a layer still sets its speed and its
+          colours, but no longer things like the number of segments.
+        </p>
+        <button className="button small primary" onClick={copy}>
+          <Copy size={14} /> Copy to my effects
+        </button>
+      </Section>
+    </aside>
+  )
+}
+
 export function EffectEditor() {
+  const preset = useStore((s) => PRESETS.find((e) => e.id === presetId(s.effectId)))
   const effect = useStore((s) => s.show.effects.find((e) => e.id === s.effectId))
   const looks = useStore((s) => s.show.looks)
   const bpm = useStore((s) => s.show.settings.bpm)
@@ -394,20 +588,24 @@ export function EffectEditor() {
   const edit = useStore((s) => s.edit)
   const editNow = useStore((s) => s.editNow)
   useReplay(useStore((s) => effectReplay(s, effect)))
+  const def = useMemo(() => effect && compileCustom(effect), [effect])
+  const once = useMemo(() => (tempo: number) => (effect ? oneShotSeconds(effect, tempo) : null), [effect])
 
-  if (!effect) {
+  if (preset) return <PresetView def={preset} />
+  if (!effect || !def) {
     return (
       <aside className="panel right wide">
-        <p className="hint">Select an effect on the left, or create a new one.</p>
+        <p className="hint">Select an effect on the left, create a new one, or copy a preset.</p>
       </aside>
     )
   }
 
   const { brightness, colour } = effect
   const change = (patch: Partial<CustomEffect>, key?: string) => editEffect(effect.id, patch, key && `${key}-${effect.id}`)
-  const n = usedBy(effect, looks)
-  const countsBeats = (brightness.mode === 'curve' && brightness.drive.sync === 'beats') || (colour.mode === 'curve' && colour.drive.sync === 'beats')
-  const usesPosition = (brightness.mode === 'curve' && brightness.drive.over === 'position') || (colour.mode === 'curve' && colour.drive.over === 'position')
+  const n = usedBy(customKey(effect.id), looks)
+  const drives = [brightness, colour].flatMap((channel) => (channel.mode === 'curve' ? drivesOf(channel) : []))
+  const countsBeats = drives.some((d) => d.sync === 'beats')
+  const usesPosition = drives.some((d) => d.over === 'position')
 
   const remove = () => {
     // Layers that used it fall back to a plain colour instead of going dark without a word.
@@ -436,7 +634,7 @@ export function EffectEditor() {
             <button className="icon" title="Duplicate effect" onClick={duplicate}>
               <Copy size={15} />
             </button>
-            <button className="icon" title={n ? `Delete effect (${n} layer${n === 1 ? '' : 's'} become a plain colour)` : 'Delete effect'} onClick={remove}>
+            <button className="icon" title={n ? `Delete effect (${layers(n)} become${n === 1 ? 's' : ''} a plain colour)` : 'Delete effect'} onClick={remove}>
               <Trash2 size={15} />
             </button>
           </span>
@@ -447,7 +645,7 @@ export function EffectEditor() {
             <TextInput value={effect.name} onChange={(name) => change({ name })} />
           </Field>
         </div>
-        <PreviewStrip effect={effect} />
+        <PreviewStrip def={def} params={OWN_PARAMS} once={once} />
         <div className="form-grid">
           {usesPosition && (
             <Field label="On stage, try it" wide>
@@ -465,7 +663,7 @@ export function EffectEditor() {
             </>
           )}
         </div>
-        <p className="summary">{n === 0 ? 'Use it in the Scenes tab: it is listed with the effects of every layer.' : `Used by ${n} layer${n === 1 ? '' : 's'}. Changes apply to all of them.`}</p>
+        <p className="summary">{n === 0 ? 'Use it in the Scenes tab: it is listed with the effects of every layer.' : `Used by ${layers(n)}. Changes apply to all of them.`}</p>
       </Section>
 
       <Section title="Brightness">
@@ -482,7 +680,7 @@ export function EffectEditor() {
             <Slider value={brightness.value} min={0} max={1} step={0.01} format={(v) => `${Math.round(v * 100)}%`} onChange={(value) => change({ brightness: { ...brightness, value } }, 'brightness')} />
           </div>
         ) : (
-          <DriveEditor drive={brightness.drive} low="dark" high="full" onChange={(patch, key) => change({ brightness: { ...brightness, drive: { ...brightness.drive, ...patch } } }, key && `brightness-${key}`)} />
+          <StackEditor stack={brightness} low="dark" high="full" onChange={(patch, key) => change({ brightness: { ...brightness, ...patch } }, key && `brightness-${key}`)} />
         )}
       </Section>
 
@@ -502,9 +700,28 @@ export function EffectEditor() {
         ) : (
           <>
             <GradientEditor stops={colour.gradient} onChange={(gradient, key) => change({ colour: { ...colour, gradient } }, key && `gradient-${key}`)} />
-            <DriveEditor drive={colour.drive} low="start" high="end" onChange={(patch, key) => change({ colour: { ...colour, drive: { ...colour.drive, ...patch } } }, key && `colour-${key}`)} />
+            <StackEditor stack={colour} low="start" high="end" onChange={(patch, key) => change({ colour: { ...colour, ...patch } }, key && `colour-${key}`)} />
           </>
         )}
+      </Section>
+
+      <Section title="Background">
+        <Segmented
+          value={effect.background ? 'colour' : 'black'}
+          onChange={(v) => change({ background: v === 'colour' ? '#101040' : undefined })}
+          options={[
+            { value: 'black', label: 'Dark' },
+            { value: 'colour', label: 'A colour' }
+          ]}
+        />
+        {effect.background ? (
+          <div className="channel-fixed">
+            <ColorInput value={effect.background} onChange={(background) => change({ background }, 'background')} />
+          </div>
+        ) : null}
+        <p className="summary background-note">
+          {effect.background ? 'Where the brightness is low, this colour shows instead of darkness.' : 'Where the brightness is low, the pixels go dark and layers below show through when the layer adds light.'}
+        </p>
       </Section>
 
       <SaveBar items={[{ kind: 'effects', ids: [effect.id] }]} noun="effect" />

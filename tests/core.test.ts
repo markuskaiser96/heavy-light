@@ -3,8 +3,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Engine } from '../src/engine/engine'
 import { createArtDmx, finishArtDmx } from '../src/engine/artnet'
 import { compileCustom, evalCurve, newCustomEffect, newDrive, normalizeEffect, oneShotSeconds } from '../src/shared/custom'
-import { LookRenderer } from '../src/engine/render'
-import { EFFECTS, prepareParams, defaultParams } from '../src/shared/effects'
+import { EFFECT_PREVIEW, LookRenderer } from '../src/engine/render'
+import { EFFECT_BY_ID, EFFECTS, prepareParams, defaultParams, type EffectDef, type RenderArgs } from '../src/shared/effects'
+import { canCopyPreset, copyPreset, presetKey, PRESETS } from '../src/shared/presets'
 import { makeGenericPixelFixture, resolveMode, type OflFixture } from '../src/shared/ofl'
 import { encodeImage } from '../src/shared/images'
 import { autoPlane, compilePatch, layoutSegments, mapImage, mapLayer, toWorld } from '../src/shared/patch'
@@ -13,7 +14,7 @@ import { newProp, propBox, PROP_TYPES } from '../src/shared/props'
 import { makeDraw } from '../src/shared/random'
 import { addScenes, advanceFlow, flowFromSteps, flowOver, link, newNode, normalizeFlow, removeNodes, START, startFlow, startNode } from '../src/shared/flow'
 import { demoShow, emptyShow, newChaser, newLayer, newLook, normalizeShow, LIBRARY } from '../src/shared/show'
-import type { FromEngine, Show } from '../src/shared/types'
+import type { CustomEffect, FromEngine, Show } from '../src/shared/types'
 
 const lib = (key: string): OflFixture => LIBRARY.find((l) => l.key === key)!.fixture
 
@@ -790,5 +791,110 @@ describe('flows', () => {
     expect(flowOver(once)).toBe(false)
     advanceFlow(chaser(open, 0.5), once, 0.6, 0, 100)
     expect(flowOver(once)).toBe(true)
+  })
+})
+
+describe('presets', () => {
+  const N = 40
+  const u = Float32Array.from({ length: N }, (_, i) => (i + 0.37) / N)
+  const frame = (def: EffectDef, p: RenderArgs['p'], t: number): number[] => {
+    const out = new Float32Array(N * 3)
+    def.render({ out, u, count: N, t, p })
+    return [...out]
+  }
+
+  it('copies a preset into curves that look like the preset with its default settings', () => {
+    // Wave is left out: its copy is the same wave, a quarter wave further along.
+    for (const id of ['solid', 'gradient', 'rainbow', 'chase', 'pulse', 'strobe', 'wipe']) {
+      const preset = EFFECT_BY_ID.get(id)!
+      const copy = copyPreset(id, 'c', 'Copy')!
+      const own = compileCustom(copy)
+      for (const t of [0.013, 0.21, 0.4731, 0.77, 1.31, 2.6]) {
+        const want = frame(preset, prepareParams(preset, defaultParams(id)), t)
+        const got = frame(own, { speed: 1 }, t)
+        // Off by more than a little on at most one pixel: the one a hard edge is passing through.
+        const off = want.filter((v, i) => Math.abs(v - got[i]) > 0.03).length
+        expect(off, `${id} at ${t} s`).toBeLessThanOrEqual(3)
+      }
+    }
+  })
+
+  it('gives a copy that is a complete effect of its own', () => {
+    for (const { id } of EFFECTS) {
+      const copy = copyPreset(id, 'c')
+      expect(copy !== null).toBe(canCopyPreset(id))
+      if (copy) expect(normalizeEffect(copy)).toEqual(copy)
+    }
+    expect(EFFECTS.filter((e) => !canCopyPreset(e.id)).map((e) => e.id)).toEqual(['image'])
+    expect(PRESETS.map((e) => e.id)).not.toContain('image')
+    expect(copyPreset('nothing', 'c')).toBeNull()
+  })
+
+  it('adds up several curves on one channel', () => {
+    const effect = newCustomEffect('s', 'Stack')
+    const level = (y: number) => ({ ...newDrive('rise'), curve: { shape: 'linear' as const, points: [{ x: 0, y }] } })
+    const run = (more: CustomEffect['brightness']['more'], amount?: number) => {
+      const own: CustomEffect = { ...effect, brightness: { mode: 'curve', value: 1, drive: level(0.5), amount, more }, colour: { ...effect.colour, mode: 'fixed', color: '#ffffff' } }
+      return +frame(compileCustom(own), { speed: 1 }, 0.3)[0].toFixed(3)
+    }
+    expect(run(undefined)).toBe(0.5)
+    expect(run(undefined, 0.5)).toBe(0.25)
+    expect(run([{ drive: level(0.4), mix: 'add', amount: 0.5 }])).toBe(0.7)
+    expect(run([{ drive: level(1), mix: 'add', amount: 1 }])).toBe(1)
+    expect(run([{ drive: level(0.8), mix: 'max', amount: 1 }])).toBe(0.8)
+    expect(run([{ drive: level(0), mix: 'multiply', amount: 0.5 }])).toBe(0.25)
+    // The copy of plasma is three waves whose shares add up to the whole gradient.
+    const plasma = copyPreset('plasma', 'p')!.colour
+    expect((plasma.amount ?? 1) + plasma.more!.reduce((n, m) => n + m.amount, 0)).toBeCloseTo(1)
+  })
+
+  it('lets every pixel run on its own, with only a share of them taking part', () => {
+    const sparkle = compileCustom(copyPreset('sparkle', 'k')!)
+    const count = 4000
+    const out = new Float32Array(count * 3)
+    const lit = (t: number) => {
+      sparkle.render({ out, u: new Float32Array(count), count, t, p: { speed: 1 } })
+      return Array.from({ length: count }, (_, i) => out[i * 3])
+    }
+    const a = lit(1)
+    // 15 % take part; a few of those have just faded to nothing.
+    const share = a.filter((v) => v > 0).length / count
+    expect(share).toBeGreaterThan(0.1)
+    expect(share).toBeLessThan(0.16)
+    // Not in step: the pixels that are lit are at different heights of the curve.
+    expect(new Set(a.filter((v) => v > 0).map((v) => v.toFixed(1))).size).toBeGreaterThan(5)
+    // The same moment looks the same again; a pass later other pixels are lit.
+    expect(lit(1)).toEqual(a)
+    const b = lit(1.25)
+    expect(b.filter((v, i) => v > 0 !== a[i] > 0).length).toBeGreaterThan(count * 0.1)
+  })
+
+  it('fades to a background colour, and lets a layer replace the colours', () => {
+    const effect: CustomEffect = { ...newCustomEffect('b', 'Back'), background: '#0000ff' }
+    effect.brightness = { mode: 'fixed', value: 0.25, drive: newDrive('sine') }
+    effect.colour = { ...effect.colour, mode: 'fixed', color: '#ff0000' }
+    const def = compileCustom(effect)
+    expect(def.params.map((p) => p.key)).toEqual(['speed', 'color', 'background'])
+    expect(frame(def, prepareParams(def, {}), 0).slice(0, 3)).toEqual([0.25, 0, 0.75])
+    expect(frame(def, prepareParams(def, { color: '#00ff00', background: '#000000' }), 0).slice(0, 3)).toEqual([0, 0.25, 0])
+
+    const graded: CustomEffect = { ...newCustomEffect('g', 'Graded') }
+    graded.brightness = { mode: 'fixed', value: 1, drive: newDrive('sine') }
+    graded.colour = { ...graded.colour, mode: 'curve', gradient: [{ at: 0, color: '#ff0000' }, { at: 1, color: '#0000ff' }], drive: newDrive('rise', { over: 'position', hz: 0 }) }
+    const g = compileCustom(graded)
+    expect(g.params.map((p) => p.key)).toEqual(['speed', 'stop1', 'stop2'])
+    const last = (p: Record<string, string>) => frame(g, prepareParams(g, p), 0).slice(-3).map((v) => Math.round(v * 10) / 10)
+    expect(last({})).toEqual([0, 0, 1])
+    expect(last({ stop2: '#00ff00' })).toEqual([0, 1, 0])
+  })
+
+  it('previews a preset on the fixtures with its default settings', () => {
+    const show = demoShow()
+    const patch = compilePatch(show)
+    const renderer = new LookRenderer(show, patch)
+    renderer.previewEffect(presetKey('solid'), 'fixture')
+    const out = new Float32Array(patch.cellCount * 3)
+    renderer.render(out, [{ lookId: EFFECT_PREVIEW, level: 1, t: 0, beat: 0 }])
+    expect([out[0], out[1], out[2]].map((v) => +v.toFixed(2))).toEqual([1, 0.48, 0.1])
   })
 })
