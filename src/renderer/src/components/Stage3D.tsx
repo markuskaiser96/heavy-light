@@ -41,8 +41,8 @@ function useFrameCells(patch: Patch): Int32Array {
   }, [patch, fixtures, definitions])
 }
 
-/** Size of one light cell of a fixture in metres (along the strip, across, depth). */
-function cellSize(pf: PatchedFixture): [number, number, number] {
+/** Distance between neighbouring grid points of a fixture in metres (along the strip, across, depth). */
+function cellPitch(pf: PatchedFixture): [number, number, number] {
   const { gridW, gridH } = pf.mode
   const { w, h } = pf.fixture.size
   const single = gridW === 1 && gridH === 1
@@ -51,8 +51,15 @@ function cellSize(pf: PatchedFixture): [number, number, number] {
   return [sx, sy, gridH > 1 || single ? 0.04 : 0.028]
 }
 
+/** Size of one light cell of a fixture in metres. */
+function cellSize(pf: PatchedFixture): [number, number, number] {
+  const [sx, sy, sz] = cellPitch(pf)
+  // A mode that drives all pixels as one colour (a segmented bar in 3-channel mode) lights up as a whole.
+  return pf.mode.cells.length === 1 ? [sx * pf.mode.gridW, sy * pf.mode.gridH, sz] : [sx, sy, sz]
+}
+
 function bodySize(pf: PatchedFixture): [number, number, number] {
-  const [sx, sy, sz] = cellSize(pf)
+  const [sx, sy, sz] = cellPitch(pf)
   const { gridW, gridH } = pf.mode
   return [sx * gridW + 0.03, sy * gridH + 0.03, sz + 0.03]
 }

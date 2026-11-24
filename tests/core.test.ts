@@ -6,14 +6,14 @@ import { compileCustom, evalCurve, newCustomEffect, newDrive, normalizeEffect, o
 import { EFFECT_PREVIEW, LookRenderer } from '../src/engine/render'
 import { EFFECT_BY_ID, EFFECTS, prepareParams, defaultParams, type EffectDef, type RenderArgs } from '../src/shared/effects'
 import { canCopyPreset, copyPreset, presetKey, PRESETS } from '../src/shared/presets'
-import { makeGenericPixelFixture, resolveMode, type OflFixture } from '../src/shared/ofl'
+import { isOflFixture, makeGenericPixelFixture, resolveMode, stageSize, type OflFixture } from '../src/shared/ofl'
 import { encodeImage } from '../src/shared/images'
 import { autoPlane, compilePatch, layoutSegments, mapImage, mapLayer, toWorld } from '../src/shared/patch'
 import { changedIds, discardItems, editBoth, editDraft, regrouped, saveItems, unsaved } from '../src/shared/drafts'
 import { newProp, propBox, PROP_TYPES } from '../src/shared/props'
 import { makeDraw } from '../src/shared/random'
 import { addScenes, advanceFlow, flowFromSteps, flowOver, link, newNode, normalizeFlow, removeNodes, START, startFlow, startNode } from '../src/shared/flow'
-import { demoShow, emptyShow, newChaser, newLayer, newLook, normalizeShow, LIBRARY } from '../src/shared/show'
+import { demoShow, emptyShow, fixtureLibrary, importKey, makerOf, newChaser, newLayer, newLook, normalizeShow, LIBRARY } from '../src/shared/show'
 import type { CustomEffect, FromEngine, Show } from '../src/shared/types'
 
 const lib = (key: string): OflFixture => LIBRARY.find((l) => l.key === key)!.fixture
@@ -73,6 +73,53 @@ describe('OFL resolver', () => {
     expect(five.writes.map((w) => w.offset)).toEqual([0, 1, 2])
     expect(five.defaults[3]).toBe(255) // dimmer open
     expect(five.defaults[4]).toBe(0) // strobe off
+  })
+
+  it('resolves the built-in Varytec Giga Bar 240', () => {
+    const bar = lib('varytec/giga-bar-240-led-rgb')
+    expect(isOflFixture(bar)).toBe(true)
+
+    // 24-channel: red, green, blue per segment, segment 1 first (manual 7.7).
+    const pixels = resolveMode(bar, '24-channel')
+    expect(pixels.channelCount).toBe(24)
+    expect(pixels.cells.map((c) => c.x)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+    expect(pixels.channelsPerPixel).toBe(3)
+    expect(pixels.writes.slice(3, 6)).toEqual([
+      { offset: 3, cell: 1, comp: 0 },
+      { offset: 4, cell: 1, comp: 1 },
+      { offset: 5, cell: 1, comp: 2 }
+    ])
+    expect(pixels.unsupported).toEqual([])
+
+    const five = resolveMode(bar, '5-channel')
+    expect(five.cells).toHaveLength(1)
+    expect([...five.defaults]).toEqual([0, 0, 0, 255, 0]) // dimmer open, strobe at 0
+    expect(resolveMode(bar, '3-channel').channelCount).toBe(3)
+    expect(resolveMode(bar, '2-channel').cells).toHaveLength(0)
+
+    // Eight segments drawn over the real length of 1084 mm.
+    const size = stageSize(bar, pixels)
+    expect((size.w / 7) * 8).toBeCloseTo(1.084, 2)
+    expect(stageSize(lib('generic/rgb-fader'), { gridW: 1, gridH: 1 })).toEqual({ w: 0.25, h: 0.15 })
+  })
+
+  it('files imported fixture types under a key of their own', () => {
+    // Downloads from open-fixture-library.org say who made the fixture.
+    const bar = lib('varytec/giga-bar-240-led-rgb')
+    expect(importKey({ ...bar, manufacturerKey: 'varytec', fixtureKey: 'giga-bar-240-led-rgb' }, 'whatever', {})).toBe('varytec/giga-bar-240-led-rgb')
+    expect(makerOf('varytec/giga-bar-240-led-rgb')).toBe('Varytec')
+
+    // Without the keys of an OFL download the file name decides; the same file again keeps its key,
+    // a different one of the same name gets a new key.
+    const plain = bar
+    const key = importKey(plain, 'My Bar (v2)', {})
+    expect(key).toBe('import/my-bar-v2')
+    expect(importKey(plain, 'My Bar (v2)', { [key]: plain })).toBe(key)
+    expect(importKey({ ...plain, name: 'Other' }, 'My Bar (v2)', { [key]: plain })).toBe('import/my-bar-v2-2')
+
+    const offered = fixtureLibrary({ [key]: plain, 'generic/pixel-96x1-rgb': makeGenericPixelFixture(96, 1), 'generic/strobe': lib('generic/strobe') })
+    expect(offered).toHaveLength(LIBRARY.length + 1)
+    expect(offered.at(-1)).toMatchObject({ key, maker: 'Imported' })
   })
 
   it('handles fine channels and dimmer-only fixtures', () => {

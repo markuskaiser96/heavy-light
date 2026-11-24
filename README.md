@@ -75,5 +75,5 @@ Fixture definitions use the [Open Fixture Library](https://open-fixture-library.
 
 ## Licence
 
-GPL-3.0, see `LICENSE`. Bundled fixture definitions come from the Open Fixture Library (MIT),
+GPL-3.0, see `LICENSE`. Bundled fixture definitions come from the Open Fixture Library (MIT) unless noted,
 see `src/shared/library/README.md`.

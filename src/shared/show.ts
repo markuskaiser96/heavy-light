@@ -6,6 +6,7 @@ import { isPropKind, newProp, propType } from './props'
 import { flowFromSteps, normalizeFlow, startNode, type OldSteps } from './flow'
 import type { Chaser, FixtureInstance, Folder, ImageAsset, Layer, Look, Show } from './types'
 import drgbFader from './library/drgb-fader.json'
+import gigaBar from './library/giga-bar-240-led-rgb.json'
 import ledBar from './library/led-bar-240-8.json'
 import rgbFader from './library/rgb-fader.json'
 import rgbwFader from './library/rgbw-fader.json'
@@ -13,14 +14,50 @@ import strobe from './library/strobe.json'
 
 export const newId = (): string => Math.random().toString(36).slice(2, 10)
 
-/** Fixture types that ship with the app (Open Fixture Library definitions). */
+/** Fixture types that ship with the app (Open Fixture Library format; where each one comes from: library/README.md). */
 export const LIBRARY: { key: string; maker: string; fixture: OflFixture }[] = [
   { key: 'generic/rgb-fader', maker: 'Generic', fixture: rgbFader as unknown as OflFixture },
   { key: 'generic/drgb-fader', maker: 'Generic', fixture: drgbFader as unknown as OflFixture },
   { key: 'generic/rgbw-fader', maker: 'Generic', fixture: rgbwFader as unknown as OflFixture },
   { key: 'generic/strobe', maker: 'Generic', fixture: strobe as unknown as OflFixture },
-  { key: 'stairville/led-bar-240-8', maker: 'Stairville', fixture: ledBar as unknown as OflFixture }
+  { key: 'stairville/led-bar-240-8', maker: 'Stairville', fixture: ledBar as unknown as OflFixture },
+  { key: 'varytec/giga-bar-240-led-rgb', maker: 'Varytec', fixture: gigaBar as unknown as OflFixture }
 ]
+
+export type LibraryEntry = (typeof LIBRARY)[number]
+
+const KEY_PART = /^[a-z0-9-]+$/
+
+/**
+ * Key under which an imported definition is stored in Show.definitions. Downloads from open-fixture-library.org
+ * name their manufacturer and fixture; other files go by their file name. A different definition that would
+ * land on a key already in use gets a number, so it never replaces the type of fixtures that are already patched.
+ */
+export function importKey(fixture: OflFixture, fileName: string, taken: Record<string, OflFixture>): string {
+  const { manufacturerKey: maker, fixtureKey: type } = fixture
+  const slug = fileName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'fixture'
+  const base = typeof maker === 'string' && typeof type === 'string' && KEY_PART.test(maker) && KEY_PART.test(type) ? `${maker}/${type}` : `import/${slug}`
+  const text = JSON.stringify(fixture)
+  let key = base
+  for (let n = 2; taken[key] && JSON.stringify(taken[key]) !== text; n++) key = `${base}-${n}`
+  return key
+}
+
+/** Manufacturer name to show in front of a fixture type, guessed from its key ("varytec/…" → "Varytec"). */
+export function makerOf(key: string): string {
+  const maker = key.split('/')[0]
+  if (maker === 'import') return 'Imported'
+  return maker.split('-').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+}
+
+/** Every fixture type the "Add fixtures" dialog offers: the built-in ones plus those the show already carries. */
+export function fixtureLibrary(definitions: Record<string, OflFixture>): LibraryEntry[] {
+  const builtIn = new Set(LIBRARY.map((l) => l.key))
+  const own = Object.entries(definitions)
+    .filter(([key]) => !builtIn.has(key) && !key.startsWith('generic/pixel-'))
+    .map(([key, fixture]) => ({ key, maker: makerOf(key), fixture }))
+  return [...LIBRARY, ...own]
+}
 
 const ORIGIN = { x: 0, y: 0, z: 0 }
 const DEFAULT_SIZE = { w: 1, h: 0 }

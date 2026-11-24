@@ -1,8 +1,8 @@
 import { Upload, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import { COLOR_ORDERS, genericPixelKey, isOflFixture, makeGenericPixelFixture, resolveMode, type ColorOrder, type OflFixture } from '@shared/ofl'
+import { COLOR_ORDERS, genericPixelKey, isOflFixture, makeGenericPixelFixture, resolveMode, stageSize, type ColorOrder, type OflFixture } from '@shared/ofl'
 import { layoutSegments } from '@shared/patch'
-import { LIBRARY, newId, nextHost } from '@shared/show'
+import { fixtureLibrary, importKey, LIBRARY, makerOf, newId, nextHost, type LibraryEntry } from '@shared/show'
 import type { FixtureInstance, Show } from '@shared/types'
 import { useStore } from '../store'
 import { Field, isIPv4, NumberInput, Segmented, Select, TextInput } from './ui'
@@ -31,12 +31,14 @@ export function AddFixtureDialog({ onClose }: { onClose: () => void }) {
   const [universe, setUniverse] = useState(suggestion.universe)
   const [address, setAddress] = useState(1)
   const [sameNode, setSameNode] = useState<'each' | 'shared'>('each')
-  const [imported, setImported] = useState<{ key: string; maker: string; fixture: OflFixture }[]>([])
+  const [imported, setImported] = useState<LibraryEntry[]>([])
   const [libraryKey, setLibraryKey] = useState(LIBRARY[0].key)
   const [modeName, setModeName] = useState(LIBRARY[0].fixture.modes[0].name)
   const [error, setError] = useState<string | null>(null)
 
-  const library = [...LIBRARY, ...imported]
+  // Types the show already carries stay on offer, so a second fixture of an imported type needs no new import.
+  const inShow = fixtureLibrary(show.definitions)
+  const library = [...inShow, ...imported.filter((i) => !inShow.some((l) => l.key === i.key))]
   const chosen = library.find((l) => l.key === libraryKey) ?? library[0]
 
   const definition = kind === 'pixels' ? makeGenericPixelFixture(width, height, order) : chosen.fixture
@@ -54,12 +56,15 @@ export function AddFixtureDialog({ onClose }: { onClose: () => void }) {
 
   const importFiles = async () => {
     const files = await window.heavy.importFixtures()
-    const added: typeof imported = []
+    const added: LibraryEntry[] = []
+    const taken = Object.fromEntries(library.map((l) => [l.key, l.fixture]))
     for (const file of files) {
       try {
         const parsed: unknown = JSON.parse(file.text)
         if (!isOflFixture(parsed)) throw new Error('not an Open Fixture Library fixture')
-        added.push({ key: `import/${file.name}`, maker: 'Imported', fixture: parsed })
+        const key = importKey(parsed, file.name, taken)
+        taken[key] = parsed
+        added.push({ key, maker: makerOf(key), fixture: parsed })
       } catch (err) {
         setError(`${file.name}.json could not be imported: ${(err as Error).message}`)
       }
@@ -94,7 +99,7 @@ export function AddFixtureDialog({ onClose }: { onClose: () => void }) {
         address: shared ? nextAddress : address,
         position: { x: +((i - (count - 1) / 2) * 0.5).toFixed(2), y: upright ? length / 2 : 1, z: 1 },
         rotation: { x: 0, y: 0, z: upright ? 90 : 0 },
-        size: kind === 'pixels' ? { w: length, h: height > 1 ? +((length / Math.max(1, width - 1)) * (height - 1)).toFixed(3) : 0 } : { w: resolved.gridW > 1 ? 1 : 0.25, h: 0.15 }
+        size: kind === 'pixels' ? { w: length, h: height > 1 ? +((length / Math.max(1, width - 1)) * (height - 1)).toFixed(3) : 0 } : stageSize(definition, resolved)
       })
       if (shared) nextAddress += channels
     }

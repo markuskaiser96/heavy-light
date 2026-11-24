@@ -347,6 +347,22 @@ export function makeGenericPixelFixture(w: number, h: number, order: ColorOrder 
   }
 }
 
+/**
+ * Extent of a library fixture's cell grid on stage in metres. Cells sit on the grid points, so the drawn
+ * body is one cell longer than the grid: the size is chosen so that the body is as long as the real fixture
+ * (OFL `physical.dimensions`, width × height × depth in mm).
+ */
+export function stageSize(fixture: OflFixture, mode: Pick<ResolvedMode, 'gridW' | 'gridH'>): { w: number; h: number } {
+  const d = fixture.physical?.dimensions
+  const known = Array.isArray(d) && d.length === 3 && d.every((v) => typeof v === 'number' && v > 0)
+  const along = (metres: number | null, grid: number, fallback: number) =>
+    metres === null ? fallback : +(grid > 1 ? (metres * (grid - 1)) / grid : metres).toFixed(3)
+  return {
+    w: along(known ? d[0] / 1000 : null, mode.gridW, mode.gridW > 1 ? 1 : 0.25),
+    h: along(known ? d[1] / 1000 : null, mode.gridH, 0.15)
+  }
+}
+
 /** Loose structural check for files a user imports. */
 export function isOflFixture(value: unknown): value is OflFixture {
   if (typeof value !== 'object' || value === null) return false

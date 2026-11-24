@@ -1,0 +1,236 @@
+{
+  "$schema": "https://raw.githubusercontent.com/OpenLightingProject/open-fixture-library/master/schemas/fixture.json",
+  "name": "Giga Bar 240 LED RGB",
+  "shortName": "GigaBar240",
+  "categories": ["Pixel Bar", "Color Changer"],
+  "meta": {
+    "authors": ["HeavyLight"],
+    "createDate": "2026-11-24",
+    "lastModifyDate": "2026-11-24"
+  },
+  "comment": "Written from the Thomann manual (ID 452370, 05.08.2019). The DMX chart is the same as the Varytec Giga Bar Frost Pix 8 RGB in the Open Fixture Library.",
+  "links": {
+    "manual": [
+      "https://im.static-thomann.de/pics/atg/atgdata/document/manual/c_452370_r2_en_online.pdf"
+    ]
+  },
+  "physical": {
+    "dimensions": [1084, 88.5, 65],
+    "weight": 2.6,
+    "power": 25,
+    "DMXconnector": "3-pin",
+    "bulb": {
+      "type": "240× 10mm LEDs (96× red, 72× green, 72× blue)"
+    },
+    "lens": {
+      "degreesMinMax": [30, 30]
+    }
+  },
+  "matrix": {
+    "pixelCount": [8, 1, 1],
+    "pixelGroups": {
+      "Master": "all"
+    }
+  },
+  "templateChannels": {
+    "Red $pixelKey": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Red"
+      }
+    },
+    "Green $pixelKey": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Green"
+      }
+    },
+    "Blue $pixelKey": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ColorIntensity",
+        "color": "Blue"
+      }
+    }
+  },
+  "availableChannels": {
+    "Dimmer": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "Intensity"
+      }
+    },
+    "Strobe": {
+      "defaultValue": 0,
+      "capability": {
+        "type": "ShutterStrobe",
+        "shutterEffect": "Strobe",
+        "speedStart": "slow",
+        "speedEnd": "fast",
+        "helpWanted": "The manual only says \"0…255 strobe effect, increasing speed\". At which DMX values is the strobe off?"
+      }
+    },
+    "Programs": {
+      "defaultValue": 0,
+      "capabilities": [
+        {
+          "dmxRange": [0, 7],
+          "type": "ShutterStrobe",
+          "shutterEffect": "Closed",
+          "comment": "LEDs off",
+          "switchChannels": {
+            "Speed / Sensitivity": "No function"
+          }
+        },
+        {
+          "dmxRange": [8, 15],
+          "type": "ColorPreset",
+          "comment": "Red",
+          "colors": ["#ff0000"],
+          "switchChannels": {
+            "Speed / Sensitivity": "No function"
+          }
+        },
+        {
+          "dmxRange": [16, 23],
+          "type": "ColorPreset",
+          "comment": "Red and green",
+          "colors": ["#ffff00"],
+          "switchChannels": {
+            "Speed / Sensitivity": "No function"
+          }
+        },
+        {
+          "dmxRange": [24, 31],
+          "type": "ColorPreset",
+          "comment": "Green",
+          "colors": ["#00ff00"],
+          "switchChannels": {
+            "Speed / Sensitivity": "No function"
+          }
+        },
+        {
+          "dmxRange": [32, 39],
+          "type": "ColorPreset",
+          "comment": "Blue and green",
+          "colors": ["#00ffff"],
+          "switchChannels": {
+            "Speed / Sensitivity": "No function"
+          }
+        },
+        {
+          "dmxRange": [40, 47],
+          "type": "ColorPreset",
+          "comment": "Blue",
+          "colors": ["#0000ff"],
+          "switchChannels": {
+            "Speed / Sensitivity": "No function"
+          }
+        },
+        {
+          "dmxRange": [48, 55],
+          "type": "ColorPreset",
+          "comment": "Blue and red",
+          "colors": ["#ff00ff"],
+          "switchChannels": {
+            "Speed / Sensitivity": "No function"
+          }
+        },
+        {
+          "dmxRange": [56, 63],
+          "type": "ColorPreset",
+          "comment": "Red, green and blue",
+          "colors": ["#ffffff"],
+          "switchChannels": {
+            "Speed / Sensitivity": "No function"
+          }
+        },
+        {
+          "dmxRange": [64, 231],
+          "type": "Effect",
+          "effectName": "Built-in automatic shows",
+          "helpWanted": "Which of the 21 shows is selected at which DMX value?",
+          "switchChannels": {
+            "Speed / Sensitivity": "Speed"
+          }
+        },
+        {
+          "dmxRange": [232, 255],
+          "type": "Effect",
+          "effectName": "Sound-controlled show",
+          "soundControlled": true,
+          "switchChannels": {
+            "Speed / Sensitivity": "Sensitivity"
+          }
+        }
+      ]
+    },
+    "No function": {
+      "capability": {
+        "type": "NoFunction"
+      }
+    },
+    "Speed": {
+      "capability": {
+        "type": "EffectSpeed",
+        "speedStart": "slow",
+        "speedEnd": "fast"
+      }
+    },
+    "Sensitivity": {
+      "capability": {
+        "type": "SoundSensitivity",
+        "soundSensitivityStart": "low",
+        "soundSensitivityEnd": "high"
+      }
+    }
+  },
+  "modes": [
+    {
+      "name": "24-channel",
+      "shortName": "24ch",
+      "channels": [
+        {
+          "insert": "matrixChannels",
+          "repeatFor": "eachPixelXYZ",
+          "channelOrder": "perPixel",
+          "templateChannels": [
+            "Red $pixelKey",
+            "Green $pixelKey",
+            "Blue $pixelKey"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5-channel",
+      "shortName": "5ch",
+      "channels": [
+        "Red Master",
+        "Green Master",
+        "Blue Master",
+        "Dimmer",
+        "Strobe"
+      ]
+    },
+    {
+      "name": "3-channel",
+      "shortName": "3ch",
+      "channels": [
+        "Red Master",
+        "Green Master",
+        "Blue Master"
+      ]
+    },
+    {
+      "name": "2-channel",
+      "shortName": "2ch",
+      "channels": [
+        "Programs",
+        "Speed / Sensitivity"
+      ]
+    }
+  ]
+}
